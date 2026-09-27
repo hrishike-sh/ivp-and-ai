@@ -1,0 +1,27 @@
+{
+  "source_size": [
+    97,
+    87
+  ],
+  "processed_size": [
+    97,
+    87
+  ],
+  "transform_to_source_pixel_centres": [
+    [
+      1.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      1.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ]
+}

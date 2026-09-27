@@ -1,0 +1,395 @@
+{
+  "schema_version": 1,
+  "kind": "video",
+  "source": "bus_static.mp4",
+  "source_info": {
+    "kind": "video",
+    "width": 480,
+    "height": 640,
+    "encoded_width": 480,
+    "encoded_height": 640,
+    "duration": 4.0,
+    "fps": 10.0,
+    "rotation": 0.0,
+    "stream_index": 0,
+    "frame_count": 40,
+    "has_audio": true,
+    "codec": "h264",
+    "size_bytes": 165025
+  },
+  "settings": {
+    "max_width": 0,
+    "denoise": "Off",
+    "kernel": 3,
+    "gamma": 1.0,
+    "clahe": false,
+    "clip_limit": 2.0,
+    "sharpen": 0.0,
+    "canny_low": 60,
+    "canny_high": 160,
+    "threshold_mode": "Otsu",
+    "threshold_value": 170,
+    "morphology": "Open + close",
+    "morph_kernel": 3,
+    "hue_center": 0,
+    "hue_tolerance": 12,
+    "saturation_min": 90,
+    "value_min": 70,
+    "line_length": 50,
+    "scene_threshold": 0.45
+  },
+  "frames": 40,
+  "duration_seconds": 4.0,
+  "elapsed_seconds": 9.93800000000192,
+  "scene_change_candidates": 0,
+  "mean_processed_quality": {
+    "brightness": 115.67295906575528,
+    "contrast": 66.22125415104733,
+    "laplacian_variance": 3025.3403761702502
+  },
+  "mask_export": {
+    "names": [],
+    "sampling": "First frame at or after each next 1-second interval"
+  },
+  "timestamp_policy": "Original frame presentation intervals preserved at 1/90000-second resolution; start normalised to zero.",
+  "audio_policy": "First audio track retained as AAC with original relative timestamps; negative pre-roll trimmed.",
+  "limitations": [
+    "Quality and scene changes are heuristics.",
+    "Road and colour masks do not classify traffic rules."
+  ],
+  "ai": {
+    "frames": 40,
+    "events_by_rule": {},
+    "assessment_counts": {
+      "helmet_absence/cannot_assess": 40,
+      "triple_riding/cannot_assess": 40,
+      "red_light_crossing/cannot_assess": 40,
+      "stop_line_encroachment/cannot_assess": 40,
+      "crossing_obstruction_during_red/cannot_assess": 40,
+      "wrong_way/cannot_assess": 40,
+      "footpath_riding/cannot_assess": 40,
+      "restricted_entry/cannot_assess": 40,
+      "prohibited_turn/cannot_assess": 40
+    },
+    "device": "cuda:0",
+    "coordinate_space": "IVP processed image; use coordinates.json to map to display-oriented source",
+    "models": {
+      "road_users": {
+        "filename": "yolo11s.pt",
+        "sha256": "85a76fe86dd8afe384648546b56a7a78580c7cb7b404fc595f97969322d502d5",
+        "bytes": 19313732
+      },
+      "helmet": {
+        "filename": "best.pt",
+        "sha256": "c8eb324e365cf4faeab491d9cc301535ec745171b55e8b1acadea62be5101a9d",
+        "bytes": 6199658,
+        "repository": "iam-tsr/yolov8n-helmet-detection",
+        "revision": "59b68b03b60314badb0c19ebcc3b95baa8241cf8",
+        "labels": {
+          "0": "With Helmet",
+          "1": "Without Helmet"
+        }
+      },
+      "scene": {
+        "repository": "IDEA-Research/grounding-dino-tiny",
+        "revision": "a2bb814dd30d776dcf7e30523b00659f4f141c71"
+      },
+      "segmentation": {
+        "repository": "nvidia/segformer-b0-finetuned-cityscapes-1024-1024",
+        "revision": "21b3847fae21ddee674abd31129307b6a1235bd9"
+      },
+      "signs": {
+        "repository": "bazyl/gtsrb-model",
+        "revision": "95f6c95c765e1705d7f92161a5a42a40a5bd8338",
+        "loaded": true
+      }
+    },
+    "scene_proposals": [
+      {
+        "label": "a crosswalk",
+        "confidence": 0.4206995964050293,
+        "box": [
+          3.4545278549194336,
+          493.10137939453125,
+          476.3392639160156,
+          637.7415771484375
+        ],
+        "track_id": null,
+        "model": "IDEA-Research/grounding-dino-tiny"
+      },
+      {
+        "label": "a traffic light",
+        "confidence": 0.3402274250984192,
+        "box": [
+          252.20558166503906,
+          85.8211898803711,
+          317.42706298828125,
+          116.04732513427734
+        ],
+        "track_id": null,
+        "model": "IDEA-Research/grounding-dino-tiny"
+      },
+      {
+        "label": "a traffic sign",
+        "confidence": 0.3639049828052521,
+        "box": [
+          0.2334335446357727,
+          149.1401824951172,
+          20.54673957824707,
+          191.20713806152344
+        ],
+        "track_id": null,
+        "model": "IDEA-Research/grounding-dino-tiny"
+      },
+      {
+        "label": "a traffic sign",
+        "confidence": 0.26298072934150696,
+        "box": [
+          0.39389491081237793,
+          144.5287628173828,
+          26.708650588989258,
+          196.73980712890625
+        ],
+        "track_id": null,
+        "model": "IDEA-Research/grounding-dino-tiny"
+      },
+      {
+        "label": "a traffic light",
+        "confidence": 0.29490330815315247,
+        "box": [
+          250.4692840576172,
+          78.97106170654297,
+          320.6174011230469,
+          146.95599365234375
+        ],
+        "track_id": null,
+        "model": "IDEA-Research/grounding-dino-tiny"
+      },
+      {
+        "label": "a traffic light",
+        "confidence": 0.3029707968235016,
+        "box": [
+          245.38804626464844,
+          74.22901916503906,
+          327.5904541015625,
+          125.56591033935547
+        ],
+        "track_id": null,
+        "model": "IDEA-Research/grounding-dino-tiny"
+      },
+      {
+        "label": "sign",
+        "confidence": 0.2508423626422882,
+        "box": [
+          0.4187697172164917,
+          139.9132080078125,
+          33.65256118774414,
+          204.8749542236328
+        ],
+        "track_id": null,
+        "model": "IDEA-Research/grounding-dino-tiny"
+      }
+    ],
+    "markings": {
+      "crossings": [
+        {
+          "polygon": [
+            [
+              475,
+              549
+            ],
+            [
+              473,
+              550
+            ],
+            [
+              207,
+              634
+            ],
+            [
+              199,
+              636
+            ],
+            [
+              26,
+              636
+            ],
+            [
+              19,
+              633
+            ],
+            [
+              18,
+              631
+            ],
+            [
+              18,
+              629
+            ],
+            [
+              58,
+              618
+            ],
+            [
+              342,
+              542
+            ],
+            [
+              347,
+              541
+            ],
+            [
+              455,
+              528
+            ],
+            [
+              458,
+              528
+            ],
+            [
+              475,
+              539
+            ]
+          ],
+          "stripe_count": 6,
+          "model_score": 0.4206995964050293,
+          "basis": "Grounded crossing proposal supported by multiple elongated white road regions"
+        }
+      ],
+      "stop_lines": []
+    },
+    "signal_observations": [],
+    "sign_observations": [
+      {
+        "box": [
+          24,
+          498,
+          77,
+          541
+        ],
+        "status": "cannot_assess",
+        "class_id": 25,
+        "label": "Road work",
+        "proposal_source": "ivp_colour_shape",
+        "restriction": null,
+        "prohibited_turns": [],
+        "associated_approach": null,
+        "reason": "Sign crop is too small, ambiguous, or outside supported classes",
+        "alternatives": [
+          {
+            "label": "Road work",
+            "score": 0.10984792560338974
+          },
+          {
+            "label": "Priority road",
+            "score": 0.07681820541620255
+          },
+          {
+            "label": "Slippery road",
+            "score": 0.06642721593379974
+          }
+        ],
+        "candidate_approaches": []
+      },
+      {
+        "box": [
+          246,
+          419,
+          285,
+          457
+        ],
+        "status": "cannot_assess",
+        "class_id": 25,
+        "label": "Road work",
+        "proposal_source": "ivp_colour_shape",
+        "restriction": null,
+        "prohibited_turns": [],
+        "associated_approach": null,
+        "reason": "Sign crop is too small, ambiguous, or outside supported classes",
+        "alternatives": [
+          {
+            "label": "Road work",
+            "score": 0.12325877696275711
+          },
+          {
+            "label": "General caution",
+            "score": 0.06178421527147293
+          },
+          {
+            "label": "Priority road",
+            "score": 0.05543339625000954
+          }
+        ],
+        "candidate_approaches": []
+      },
+      {
+        "box": [
+          249,
+          59,
+          340,
+          155
+        ],
+        "status": "cannot_assess",
+        "class_id": 25,
+        "label": "Road work",
+        "proposal_source": "ivp_colour_shape",
+        "restriction": null,
+        "prohibited_turns": [],
+        "associated_approach": null,
+        "reason": "Sign crop is too small, ambiguous, or outside supported classes",
+        "alternatives": [
+          {
+            "label": "Road work",
+            "score": 0.13976508378982544
+          },
+          {
+            "label": "Priority road",
+            "score": 0.1364680975675583
+          },
+          {
+            "label": "General caution",
+            "score": 0.0789220929145813
+          }
+        ],
+        "candidate_approaches": []
+      },
+      {
+        "box": [
+          381,
+          0,
+          453,
+          65
+        ],
+        "status": "cannot_assess",
+        "class_id": 25,
+        "label": "Road work",
+        "proposal_source": "ivp_colour_shape",
+        "restriction": null,
+        "prohibited_turns": [],
+        "associated_approach": null,
+        "reason": "Sign crop is too small, ambiguous, or outside supported classes",
+        "alternatives": [
+          {
+            "label": "Road work",
+            "score": 0.19961699843406677
+          },
+          {
+            "label": "Right-of-way at intersection",
+            "score": 0.09368683397769928
+          },
+          {
+            "label": "Stop",
+            "score": 0.06667911261320114
+          }
+        ],
+        "candidate_approaches": []
+      }
+    ],
+    "limitations": [
+      "Experimental model results require review.",
+      "Automatic legal scene association is still under development; unresolved rules return cannot_assess.",
+      "Geometric rider association has not yet been validated on crowded traffic.",
+      "Model scores are not calibrated probabilities of a violation."
+    ]
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "runs": {
+    "street": "20260909-215526-a0a70f65",
+    "crossing": "20260909-143842-9b52a43d",
+    "sign": "20260909-213746-6af376d8"
+  },
+  "note": "Saved genuine model outputs. Cyan overlay visualises recorded road-user detections, not violations. Video is a still-photo test clip with generated audio."
+}

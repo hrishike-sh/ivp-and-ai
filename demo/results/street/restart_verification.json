@@ -1,0 +1,22 @@
+{
+  "source_frames": 40,
+  "output_frames": 40,
+  "records": 40,
+  "maximum_timestamp_error": 0.0,
+  "output_info": {
+    "kind": "video",
+    "width": 480,
+    "height": 640,
+    "encoded_width": 480,
+    "encoded_height": 640,
+    "duration": 4.0,
+    "fps": 10.0,
+    "rotation": 0.0,
+    "stream_index": 0,
+    "frame_count": 40,
+    "has_audio": true,
+    "codec": "h264",
+    "size_bytes": 211182
+  },
+  "events": 0
+}
