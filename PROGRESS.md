@@ -114,3 +114,11 @@ Evaluated IISc AIM's pinned UVH-26 YOLO11-S checkpoint against the current COCO 
 EventCollector now keys turn episodes by the originating entry timestamp as well as track and rule. A brief gap in resolved turn observations no longer produces another event for the same retained entry. A distinct entry is not merged into an earlier manoeuvre merely because it occurs within the generic event gap. The entry cache expires with the eight-second turn-context window and is cleared at scene changes. Current positive decisions remain available for display even when their already-reported event is suppressed.
 
 Verification: 14 event/context/worker tests pass, including three new regressions covering intermittent observations of one entry, distinct entries within the generic gap, and expiration/scene reset. Real calibrated turn-video validation and automatic calibration remain outstanding.
+
+## 13 October 2026 - preserve job updates during stale-status recovery
+
+Fixed a race in the shared IVP/AI job manager. A UI refresh could read a stale active status, acquire the worker lock after the worker finished or updated its status, and overwrite the newer status with `interrupted`. Completed exports then disappeared from the result panel and saved-run downloads. Recovery now rereads the status while holding the lock and only marks an active job interrupted when that latest status is still at least 30 seconds old.
+
+Six deterministic regressions reproduced the overwrite for completed, cancelled, failed, freshly queued, running and encoding statuses before the fix. They now preserve the complete latest status on disk and in the refresh result. An additional test confirms that a slow worker holding the OS lock retains its status; the existing interrupted-worker recovery test still passes.
+
+Validation used Python 3.11.17, the unchanged pinned IVP dependencies and FFmpeg 7.1.5 on Linux. The baseline suite passed 100 tests; the final suite passed 107 tests in 20.92 seconds, including app, video timing/audio, cancellation and recorded/synthetic AI checks. `python -m compileall -q app.py classroom.py launch.py ivp traffic_ai tests`, Ruff 0.17.0 correctness checks (`ruff check --select E9,F63,F7,F82 .`) and `git diff --check` passed. Windows launchers and live neural-model inference were not exercised by this change.

@@ -63,17 +63,24 @@ def read_status(run):
         return {"state": "unknown", "message": "Waiting for job status."}
 
 
+def _is_stale_status(state):
+    if state.get("state") not in ("queued", "running", "encoding"):
+        return False
+    age = (datetime.now(timezone.utc) - datetime.fromisoformat(state["updated_at"])).total_seconds()
+    return age >= 30
+
+
 def refreshed_status(run):
     state = read_status(run)
-    if state.get("state") not in ("queued", "running", "encoding"):
-        return state
-    age = (datetime.now(timezone.utc) - datetime.fromisoformat(state["updated_at"])).total_seconds()
-    if age < 30:
+    if not _is_stale_status(state):
         return state
     try:
         with job_lock():
-            state = {**state, "state": "interrupted", "message": "Worker stopped unexpectedly. Start a new run from the original upload.", "updated_at": now()}
-            write_json(Path(run) / "status.json", state)
+            # A worker may have updated or finished since the initial status read.
+            state = read_status(run)
+            if _is_stale_status(state):
+                state = {**state, "state": "interrupted", "message": "Worker stopped unexpectedly. Start a new run from the original upload.", "updated_at": now()}
+                write_json(Path(run) / "status.json", state)
     except RuntimeError:
         pass
     return state
