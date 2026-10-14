@@ -148,3 +148,58 @@ def test_tracking_gap_cannot_bridge_a_red_crossing():
     result = lookup(engine.evaluate(vehicle(y=60), 2, scene(2), video=True))
     assert result[Rule.RED_LIGHT] == Verdict.UNKNOWN
     assert result[Rule.STOP_LINE] == Verdict.UNKNOWN
+
+
+def wide_scene(timestamp):
+    current = scene(timestamp)
+    current.approach_polygon = [(0, 0), (400, 0), (400, 300), (0, 300)]
+    current.stop_line = ((0, 50), (400, 50))
+    current.permitted_direction = (1, 0)
+    current.restricted_polygon = [(100, 0), (400, 0), (400, 300), (100, 300)]
+    current.restricted_classes = {"motorcycle"}
+    return current
+
+
+@pytest.mark.parametrize("rule,before,after,elapsed", [
+    (Rule.RED_LIGHT, (50, 40), (50, 180), .2),
+    (Rule.WRONG_WAY, (200, 75), (50, 75), .6),
+    (Rule.RESTRICTED, (40, 75), (180, 75), .2),
+], ids=["red-crossing", "wrong-way", "restricted-entry"])
+def test_discontinuous_track_cannot_report_motion_violation(rule, before, after, elapsed):
+    engine = RuleEngine()
+    engine.evaluate(vehicle(*before), 0, wide_scene(0), video=True)
+    results = lookup(engine.evaluate(vehicle(*after), elapsed, wide_scene(elapsed), video=True))
+    assert results[rule] == Verdict.UNKNOWN
+
+
+def test_discontinuous_track_cannot_inherit_a_previous_red_entry():
+    engine = RuleEngine()
+    engine.evaluate(vehicle(y=40), 0, wide_scene(0), video=True)
+    engine.evaluate(vehicle(y=56), .1, wide_scene(.1), video=True)
+    engine.evaluate(vehicle(x=200, y=180), .2, wide_scene(.2), video=True)
+    states = []
+    for index in range(1, 16):
+        timestamp = .2 + index * .1
+        states.append(lookup(engine.evaluate(vehicle(x=200, y=180), timestamp, wide_scene(timestamp), video=True)))
+    assert states[-1][Rule.STOP_LINE] == Verdict.UNKNOWN
+    assert all(result[Rule.STOP_LINE] != Verdict.VIOLATION for result in states)
+
+
+def test_continuous_motion_after_a_jump_can_establish_new_evidence():
+    engine = RuleEngine()
+    engine.evaluate(vehicle(x=200, y=75), 0, wide_scene(0), video=True)
+    jumped = lookup(engine.evaluate(vehicle(x=50, y=75), .6, wide_scene(.6), video=True))
+    assert jumped[Rule.WRONG_WAY] == Verdict.UNKNOWN
+    engine.evaluate(vehicle(x=45, y=75), .8, wide_scene(.8), video=True)
+    recovered = lookup(engine.evaluate(vehicle(x=30, y=75), 1.2, wide_scene(1.2), video=True))
+    assert recovered[Rule.WRONG_WAY] == Verdict.VIOLATION
+
+
+def test_jump_in_one_track_does_not_discard_another_tracks_crossing():
+    engine = RuleEngine()
+    for identity in (1, 2):
+        engine.evaluate(vehicle(y=40, track=identity), 0, wide_scene(0), video=True)
+    jumped = lookup(engine.evaluate(vehicle(y=180, track=1), .2, wide_scene(.2), video=True))
+    continuous = lookup(engine.evaluate(vehicle(y=60, track=2), .2, wide_scene(.2), video=True))
+    assert jumped[Rule.RED_LIGHT] == Verdict.UNKNOWN
+    assert continuous[Rule.RED_LIGHT] == Verdict.VIOLATION
