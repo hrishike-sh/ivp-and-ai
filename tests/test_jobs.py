@@ -126,3 +126,49 @@ def test_worker_log_failure_is_saved(tmp_path, monkeypatch):
     run = next(jobs.RUNS.glob("*/status.json")).parent
     assert jobs.read_status(run)["state"] == "failed"
     assert not (run / "process.json").exists()
+
+
+@pytest.mark.parametrize("payload", [
+    None,
+    [],
+    "running",
+    {"state": "queued"},
+    {"state": "running", "updated_at": None},
+    {"state": "encoding", "updated_at": 123},
+    {"state": "running", "updated_at": "not a timestamp"},
+    {"state": "encoding", "updated_at": "2026-10-14T08:00:00"},
+], ids=["null", "array", "string", "missing-time", "null-time", "numeric-time", "invalid-time", "naive-time"])
+def test_unreadable_status_does_not_break_refresh_or_block_new_jobs(tmp_path, monkeypatch, payload):
+    monkeypatch.setattr(jobs, "RUNS", tmp_path / "runs")
+    run = jobs.RUNS / "unreadable"
+    run.mkdir(parents=True)
+    write_json(run / "status.json", payload)
+    original = (run / "status.json").read_bytes()
+
+    status = jobs.refreshed_status(run)
+    assert status["state"] == "unknown"
+    assert "unreadable" in status["message"]
+    assert "Start a new run" in status["message"]
+    assert (run / "status.json").read_bytes() == original
+
+    # Invalid metadata cannot bypass the OS lock protecting a real worker.
+    with jobs.job_lock():
+        with pytest.raises(RuntimeError, match="Another video job"):
+            jobs.start_video(tmp_path / "source.mp4", {"kind": "video"}, Settings(), [])
+
+    monkeypatch.setattr(jobs.subprocess, "Popen", lambda *args, **kwargs: SimpleNamespace(pid=123))
+    started = jobs.start_video(tmp_path / "source.mp4", {"kind": "video"}, Settings(), [])
+    assert started != run
+    assert jobs.read_status(started)["state"] == "queued"
+    assert (run / "status.json").read_bytes() == original
+
+
+@pytest.mark.parametrize("state", ["complete", "cancelled", "failed"])
+def test_terminal_status_remains_readable_without_a_timestamp(tmp_path, state):
+    status = {"state": state, "message": "Saved result"}
+    write_json(tmp_path / "status.json", status)
+    assert jobs.refreshed_status(tmp_path) == status
+
+
+def test_missing_status_still_waits_for_worker(tmp_path):
+    assert jobs.read_status(tmp_path) == {"state": "unknown", "message": "Waiting for job status."}

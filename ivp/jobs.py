@@ -58,9 +58,18 @@ def new_run():
 
 def read_status(run):
     try:
-        return json.loads((Path(run) / "status.json").read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        state = json.loads((Path(run) / "status.json").read_text(encoding="utf-8"))
+        if not isinstance(state, dict):
+            raise ValueError("Job status must be a JSON object.")
+        if state.get("state") in ("queued", "running", "encoding"):
+            updated_at = datetime.fromisoformat(state["updated_at"])
+            if updated_at.tzinfo is None:
+                raise ValueError("Active job timestamps must include a timezone.")
+        return state
+    except OSError:
         return {"state": "unknown", "message": "Waiting for job status."}
+    except (ValueError, TypeError, KeyError):
+        return {"state": "unknown", "message": "Job status is unreadable. Start a new run from the original upload."}
 
 
 def _is_stale_status(state):
