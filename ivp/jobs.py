@@ -107,9 +107,14 @@ def start_video(path, info, settings, selected_masks, ai=False):
         write_json(run / "request.json", {"source": str(Path(path).resolve()), "info": info,
                    "settings": settings.to_dict(), "selected_masks": selected_masks, "created_at": now(), "ai": ai})
         write_json(run / "status.json", {"state": "queued", "progress": 0, "updated_at": now(), "message": "Starting video worker."})
-        with (run / "worker.log").open("wb") as log:
-            process = subprocess.Popen([executable, "-m", module, str(run)], cwd=ROOT,
-                                       stdout=log, stderr=subprocess.STDOUT, **hidden_process_options())
+        try:
+            with (run / "worker.log").open("wb") as log:
+                process = subprocess.Popen([executable, "-m", module, str(run)], cwd=ROOT,
+                                           stdout=log, stderr=subprocess.STDOUT, **hidden_process_options())
+        except OSError as exc:
+            message = f"Could not start the processing worker: {exc}"
+            write_json(run / "status.json", {"state": "failed", "progress": 0, "updated_at": now(), "message": message})
+            raise RuntimeError(message) from exc
         write_json(run / "process.json", {"pid": process.pid})
         return run
 

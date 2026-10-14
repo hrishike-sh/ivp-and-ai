@@ -3,11 +3,13 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
 import ivp.jobs as jobs
 from ivp.media import hidden_process_options, write_json
+from ivp.pipeline import Settings
 
 
 def test_exclusive_lock_rejects_second_worker(tmp_path, monkeypatch):
@@ -66,3 +68,61 @@ def test_stale_status_is_preserved_while_worker_holds_lock(tmp_path, monkeypatch
     with jobs.job_lock():
         assert jobs.refreshed_status(run) == status
     assert jobs.read_status(run) == status
+
+
+@pytest.mark.parametrize("ai", [False, True], ids=["ivp", "ai"])
+def test_worker_launch_failure_is_saved_and_allows_immediate_retry(tmp_path, monkeypatch, ai):
+    monkeypatch.setattr(jobs, "RUNS", tmp_path / "runs")
+    source = tmp_path / "original.mp4"
+    source.write_bytes(b"original upload")
+    unusable_python = tmp_path / "unusable-python"
+    unusable_python.write_text("not an executable", encoding="utf-8")
+    if ai:
+        from traffic_ai import runtime
+
+        monkeypatch.setattr(runtime, "python_path", lambda: unusable_python)
+    else:
+        monkeypatch.setattr(jobs.sys, "executable", str(unusable_python))
+
+    with pytest.raises(RuntimeError, match="Could not start the processing worker") as error:
+        jobs.start_video(source, {"kind": "video"}, Settings(), [], ai=ai)
+
+    run = next(jobs.RUNS.glob("*/status.json")).parent
+    status = jobs.read_status(run)
+    assert status["state"] == "failed"
+    assert status["progress"] == 0
+    assert isinstance(error.value.__cause__, OSError)
+    assert str(error.value.__cause__) in status["message"]
+    assert datetime.fromisoformat(status["updated_at"]).tzinfo is not None
+    assert (run / "request.json").is_file()
+    assert not (run / "process.json").exists()
+    assert source.read_bytes() == b"original upload"
+
+    def launch_retry(command, **kwargs):
+        assert command[1:3] == ["-m", "traffic_ai.worker" if ai else "ivp.worker"]
+        return SimpleNamespace(pid=123)
+
+    monkeypatch.setattr(jobs.subprocess, "Popen", launch_retry)
+    retry = jobs.start_video(source, {"kind": "video"}, Settings(), [], ai=ai)
+    assert retry != run
+    assert jobs.read_status(retry)["state"] == "queued"
+    assert (retry / "process.json").is_file()
+    assert jobs.read_status(run) == status
+
+
+def test_worker_log_failure_is_saved(tmp_path, monkeypatch):
+    monkeypatch.setattr(jobs, "RUNS", tmp_path / "runs")
+    original_new_run = jobs.new_run
+
+    def run_with_unwritable_log():
+        run = original_new_run()
+        (run / "worker.log").mkdir()
+        return run
+
+    monkeypatch.setattr(jobs, "new_run", run_with_unwritable_log)
+    with pytest.raises(RuntimeError, match="Could not start the processing worker"):
+        jobs.start_video(tmp_path / "source.mp4", {"kind": "video"}, Settings(), [])
+
+    run = next(jobs.RUNS.glob("*/status.json")).parent
+    assert jobs.read_status(run)["state"] == "failed"
+    assert not (run / "process.json").exists()
