@@ -73,6 +73,14 @@ def load_image(path):
     try:
         with Image.open(path) as image:
             image = ImageOps.exif_transpose(image)
+            if image.mode in ("I;16", "I;16L", "I;16B", "I;16N"):
+                samples = np.asarray(image, dtype=np.uint32)
+                # Round the full unsigned 16-bit range to 8 bits.
+                gray = ((samples + 128) // 257).astype(np.uint8)
+                transparency = image.info.get("transparency")
+                if transparency is not None:
+                    gray[samples == transparency] = 255
+                image = Image.fromarray(gray)
             if image.mode in ("RGBA", "LA") or "transparency" in image.info:
                 layer = image.convert("RGBA")
                 background = Image.new("RGBA", layer.size, "white")

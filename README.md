@@ -31,6 +31,8 @@ The colour pipeline is orientation correction → optional downsize preserving a
 
 Video previews and worker frames apply quarter-turn display rotations and horizontal/vertical reflections before processing, so mirrored camera metadata is preserved in the displayed orientation and exported pixels.
 
+Unsigned 16-bit grayscale PNGs are scaled from 0–65535 to 0–255 with rounding before RGB processing. Transparent samples use the same white background as other images.
+
 Feature extraction branches from the prepared frames. Grayscale, thresholding, edges, contours, and lines use the processed colour frame. HSV and colour masks use the original resized colour frame so enhancement cannot manufacture a signal colour.
 
 Feature views include grayscale, Hue, Saturation, Value, configurable circular hue mask, white marking mask, Canny edges, binary threshold, morphology, contours, Hough lines, road candidates, and stripe mask. Hue display is rescaled to 0–255 for viewing; colour controls use OpenCV's hue scale 0–179. Red wraps around the hue boundary. Otsu, adaptive Gaussian, and fixed thresholding are available. Morphology supports off, open, close, and open followed by close.

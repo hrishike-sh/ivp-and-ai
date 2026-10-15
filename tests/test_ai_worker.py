@@ -1,6 +1,7 @@
 import json
 
 import numpy as np
+import pytest
 from PIL import Image
 
 from ivp.media import load_image, write_json
@@ -17,6 +18,7 @@ class FakeAnalyzer:
     def analyze(self, result, original, video, scene_change):
         assert not video
         assert original.shape == (80, 120, 3)
+        assert original[0, 0].tolist() == [80, 80, 80]
         output = result.color_rgb.copy()
         output[5:10, 5:10] = [0, 255, 0]
         return output, FrameAnalysis(0, [Detection("car", .9, (15, 15, 35, 35))], []), []
@@ -25,12 +27,14 @@ class FakeAnalyzer:
         return {"events_by_rule": {}, "assessment_counts": {}, "test_double": True}
 
 
-def test_image_worker_writes_reopenable_media_and_mapping(tmp_path, monkeypatch):
+@pytest.mark.parametrize("source_mode", ["rgb8", "gray16"])
+def test_image_worker_writes_reopenable_media_and_mapping(tmp_path, monkeypatch, source_mode):
     from traffic_ai import worker
 
     monkeypatch.setattr(worker, "Analyzer", FakeAnalyzer)
     source = tmp_path / "original.png"
-    Image.fromarray(np.full((80, 120, 3), 80, np.uint8)).save(source)
+    pixels = np.full((80, 120), 80 * 257, np.uint16) if source_mode == "gray16" else np.full((80, 120, 3), 80, np.uint8)
+    Image.fromarray(pixels).save(source)
     before = source.read_bytes()
     run = tmp_path / "run"
     run.mkdir()
