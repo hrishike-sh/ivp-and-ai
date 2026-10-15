@@ -24,6 +24,17 @@ def hidden_process_options():
     return {"creationflags": subprocess.CREATE_NO_WINDOW} if hasattr(subprocess, "CREATE_NO_WINDOW") else {}
 
 
+def _display_reflected(matrix):
+    try:
+        rows = [[int(value) for value in row.split(":", 1)[1].split()]
+                for row in matrix.strip().splitlines()]
+        if len(rows) != 3 or any(len(row) != 3 for row in rows):
+            raise ValueError("Expected a 3 by 3 display matrix.")
+    except (ValueError, IndexError, AttributeError) as exc:
+        raise MediaError("Cannot read the video's display orientation. Re-export it as an H.264 MP4.") from exc
+    return rows[0][0] * rows[1][1] - rows[0][1] * rows[1][0] < 0
+
+
 def probe_video(path):
     command = [tool_path("ffprobe"), "-v", "error", "-show_streams", "-show_format", "-of", "json", str(path)]
     try:
@@ -35,9 +46,12 @@ def probe_video(path):
         if not stream:
             raise MediaError("The selected file does not contain a video stream.")
         rotation = float(stream.get("tags", {}).get("rotate", 0))
+        reflected = False
         for side in stream.get("side_data_list", []):
             if "rotation" in side:
                 rotation = float(side["rotation"])
+            if "displaymatrix" in side:
+                reflected = _display_reflected(side["displaymatrix"])
         rate = stream.get("avg_frame_rate", "0/1")
         num, den = map(float, rate.split("/"))
         fps = num / den if den else 0
@@ -47,7 +61,7 @@ def probe_video(path):
         duration = float(stream.get("duration") or info.get("format", {}).get("duration") or 0)
         return {"kind": "video", "width": width, "height": height, "encoded_width": stream["width"],
                 "encoded_height": stream["height"], "duration": duration, "fps": fps,
-                "rotation": rotation, "stream_index": stream["index"],
+                "rotation": rotation, "reflected": reflected, "stream_index": stream["index"],
                 "frame_count": int(stream.get("nb_frames", 0) or 0),
                 "has_audio": any(s["codec_type"] == "audio" for s in info["streams"]),
                 "codec": stream.get("codec_name", "unknown"), "size_bytes": Path(path).stat().st_size}
@@ -71,9 +85,12 @@ def load_image(path):
         raise MediaError("Cannot read this image. Use a valid JPG or PNG; very large images should be resized first.") from exc
 
 
-def orient_video(rgb, rotation):
+def orient_video(rgb, rotation, reflected=False):
+    # A reflected display matrix needs a vertical flip before its rotation.
+    if reflected:
+        rgb = np.flipud(rgb)
     quarter_turns = round(rotation / 90) % 4
-    return np.ascontiguousarray(np.rot90(rgb, quarter_turns)) if quarter_turns else rgb
+    return np.ascontiguousarray(np.rot90(rgb, quarter_turns)) if quarter_turns or reflected else rgb
 
 
 def video_frames(path, info):
@@ -94,13 +111,13 @@ def video_frames(path, info):
                     raise MediaError("Video has repeated or out-of-order timestamps. Re-export it before processing.")
                 if pending is not None:
                     old_frame, old_stamp, old_absolute = pending
-                    yield orient_video(old_frame.to_ndarray(format="rgb24"), info["rotation"]), old_stamp, stamp - old_stamp, old_absolute
+                    yield orient_video(old_frame.to_ndarray(format="rgb24"), info["rotation"], info.get("reflected", False)), old_stamp, stamp - old_stamp, old_absolute
                 last = stamp
                 pending = (frame, stamp, absolute)
             if pending is not None:
                 frame, stamp, absolute = pending
                 duration = float(frame.duration * frame.time_base) if frame.duration else 1 / (info["fps"] or 25)
-                yield orient_video(frame.to_ndarray(format="rgb24"), info["rotation"]), stamp, duration, absolute
+                yield orient_video(frame.to_ndarray(format="rgb24"), info["rotation"], info.get("reflected", False)), stamp, duration, absolute
     except av.FFmpegError as exc:
         raise MediaError(f"Video decoding failed: {exc}. Try converting the source to H.264 MP4.") from exc
 
@@ -116,7 +133,7 @@ def preview_frame(path, info, seconds):
             last = None
             for frame in container.decode(stream):
                 stamp = float((frame.pts - start) * stream.time_base) if frame.pts is not None else 0
-                last = (orient_video(frame.to_ndarray(format="rgb24"), info["rotation"]), max(0, stamp))
+                last = (orient_video(frame.to_ndarray(format="rgb24"), info["rotation"], info.get("reflected", False)), max(0, stamp))
                 if stamp >= seconds:
                     return last
             if last:

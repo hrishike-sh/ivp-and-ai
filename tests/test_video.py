@@ -38,6 +38,13 @@ def stamps(path):
         return [float(frame.pts * frame.time_base) for frame in container.decode(video=0)]
 
 
+def ffmpeg_display_frames(path, info):
+    result = subprocess.run([tool_path("ffmpeg"), "-hide_banner", "-loglevel", "error", "-i", str(path),
+                             "-map", "0:v:0", "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"],
+                            check=True, capture_output=True, **hidden_process_options())
+    return np.frombuffer(result.stdout, np.uint8).reshape(-1, info["height"], info["width"], 3)
+
+
 def test_audio_timing_masks_and_output(source, tmp_path):
     run = request_run(tmp_path, source, Settings(gamma=1.2), ["Edges"])
     process_video(run)
@@ -137,6 +144,54 @@ def test_rotation_metadata_applied_once(source, tmp_path):
     output, _ = preview_frame(run / "processed.mp4", result_info, 0)
     assert output.shape == preview.shape
     assert np.abs(output.astype(float) - preview.astype(float)).mean() < 8
+
+
+@pytest.mark.parametrize("rotation", [0, 90, 180, 270])
+@pytest.mark.parametrize("flip", [None, "h", "v"], ids=["rotation-only", "horizontal", "vertical"])
+def test_display_orientation_matches_ffmpeg(source, tmp_path, rotation, flip):
+    oriented = tmp_path / "oriented.mp4"
+    flip_args = ["-display_" + flip + "flip"] if flip else []
+    ffmpeg("-display_rotation", rotation, *flip_args, "-i", source, "-c", "copy", oriented)
+    info = probe_video(oriented)
+    expected = ffmpeg_display_frames(oriented, info)
+    preview, timestamp = preview_frame(oriented, info, 0)
+    assert timestamp == 0
+    assert np.array_equal(preview, expected[0])
+    frames = list(video_frames(oriented, info))
+    assert np.array_equal(np.stack([rgb for rgb, *_ in frames]), expected)
+    assert [stamp for _, stamp, *_ in frames] == pytest.approx(stamps(oriented), abs=2 / 90000)
+    if flip is None:
+        legacy_info = {key: value for key, value in info.items() if key != "reflected"}
+        assert np.array_equal(preview_frame(oriented, legacy_info, 0)[0], expected[0])
+        assert np.array_equal(next(video_frames(oriented, legacy_info))[0], expected[0])
+
+
+@pytest.mark.parametrize("rotation,flip", [(0, "h"), (90, "h"), (0, "v"), (90, "v")])
+def test_reflected_export_and_ai_frames_keep_display_orientation(source, tmp_path, rotation, flip):
+    oriented = tmp_path / "reflected.mp4"
+    ffmpeg("-display_rotation", rotation, "-display_" + flip + "flip", "-i", source, "-c", "copy", oriented)
+    original = oriented.read_bytes()
+    info = probe_video(oriented)
+    expected = ffmpeg_display_frames(oriented, info)
+    run = request_run(tmp_path, oriented)
+
+    def hook(result, original_rgb, index, distance):
+        assert np.array_equal(original_rgb, expected[index])
+        assert np.array_equal(result.color_rgb, expected[index])
+        return result.color_rgb
+
+    process_video(run, frame_hook=hook)
+    assert read_status(run)["state"] == "complete"
+    output = run / "processed.mp4"
+    output_info = probe_video(output)
+    assert output_info["rotation"] == 0
+    assert output_info["reflected"] is False
+    assert output_info["has_audio"]
+    output_frames = np.stack([rgb for rgb, *_ in video_frames(output, output_info)])
+    assert output_frames.shape == expected.shape
+    assert np.abs(output_frames.astype(float) - expected.astype(float)).mean() < 8
+    assert stamps(output) == pytest.approx(stamps(oriented), abs=2 / 90000)
+    assert oriented.read_bytes() == original
 
 
 def test_odd_resize_padding(source, tmp_path):
