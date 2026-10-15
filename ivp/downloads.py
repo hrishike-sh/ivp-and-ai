@@ -1,4 +1,5 @@
 import mimetypes
+import os
 import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -30,10 +31,21 @@ class FileServer:
                     return
                 with owner.lock:
                     path = owner.files.get(parts[3])
-                if path is None or not path.is_file():
+                if path is None:
                     self.send_error(404)
                     return
-                size = path.stat().st_size
+                try:
+                    file = path.open("rb") if path.is_file() else None
+                except OSError:
+                    file = None
+                if file is None:
+                    self.send_error(404)
+                    return
+                with file as handle:
+                    self.serve_file(handle, path, body, parts[2] == "download")
+
+            def serve_file(self, file, path, body, download):
+                size = os.fstat(file.fileno()).st_size
                 start, end = 0, max(0, size - 1)
                 range_value = self.headers.get("Range")
                 if range_value:
@@ -63,20 +75,19 @@ class FileServer:
                 self.send_header("X-Content-Type-Options", "nosniff")
                 if range_value:
                     self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
-                if parts[2] == "download":
+                if download:
                     self.send_header("Content-Disposition", "attachment; filename*=UTF-8''" + quote(path.name))
                 self.end_headers()
                 if body:
                     try:
-                        with path.open("rb") as file:
-                            file.seek(start)
-                            remaining = end - start + 1 if size else 0
-                            while remaining:
-                                chunk = file.read(min(1024 * 1024, remaining))
-                                if not chunk:
-                                    break
-                                self.wfile.write(chunk)
-                                remaining -= len(chunk)
+                        file.seek(start)
+                        remaining = end - start + 1 if size else 0
+                        while remaining:
+                            chunk = file.read(min(1024 * 1024, remaining))
+                            if not chunk:
+                                break
+                            self.wfile.write(chunk)
+                            remaining -= len(chunk)
                     except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                         pass
 
