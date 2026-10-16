@@ -1,4 +1,6 @@
 import argparse
+import contextlib
+import errno
 import json
 import os
 import socket
@@ -22,12 +24,50 @@ def healthy():
         return False
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--no-browser", action="store_true")
-    args = parser.parse_args()
-    if sys.version_info[:2] != (3, 11):
-        raise SystemExit("Use the isolated Python 3.11 environment: double-click Start.cmd.")
+@contextlib.contextmanager
+def startup_lock(timeout=35):
+    (ROOT / "temp").mkdir(exist_ok=True)
+    with (ROOT / "temp" / ".startup.lock").open("a+b") as lock:
+        if lock.seek(0, 2) == 0:
+            lock.write(b"0")
+            lock.flush()
+        if os.name == "nt":
+            import msvcrt
+
+            def acquire():
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+
+            def release():
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            def acquire():
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+            def release():
+                fcntl.flock(lock, fcntl.LOCK_UN)
+
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                acquire()
+                break
+            except OSError as exc:
+                if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                    raise
+                if time.monotonic() >= deadline:
+                    raise SystemExit("Another Traffic Lab launcher is still starting. Wait for it to finish, then retry Start.cmd.") from exc
+                time.sleep(.1)
+        try:
+            yield
+        finally:
+            release()
+
+
+def _ensure_server():
     if not healthy():
         with socket.socket() as sock:
             if sock.connect_ex(("127.0.0.1", 8511)) == 0:
@@ -47,6 +87,16 @@ def main():
             time.sleep(0.25)
         else:
             raise SystemExit("Server is taking longer than expected. Check temp/server.log and retry Start.cmd.")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--no-browser", action="store_true")
+    args = parser.parse_args()
+    if sys.version_info[:2] != (3, 11):
+        raise SystemExit("Use the isolated Python 3.11 environment: double-click Start.cmd.")
+    with startup_lock():
+        _ensure_server()
     print("Traffic Lab is running at " + URL)
     if not args.no_browser:
         webbrowser.open(URL)

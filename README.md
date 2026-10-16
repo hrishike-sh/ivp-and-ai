@@ -10,6 +10,8 @@ A local image and video processing application for the combined IVP and AI traff
 
 Double-click **Start.cmd**. It opens http://127.0.0.1:8511 in your browser. The server runs in the background on this computer only. Double-click **Stop.cmd** to stop the server and request cancellation of active video jobs.
 
+Overlapping Start actions wait for the current startup and reuse the same server, preserving the server PID used by Stop.cmd.
+
 The isolated `.venv` uses Python 3.11. The system Python installation is unchanged. Dependencies are pinned in `requirements.txt`; `requirements.in` is the editable dependency specification. FFmpeg and ffprobe must be on PATH for video inspection and export.
 
 To rebuild the environment, run `powershell -NoProfile -ExecutionPolicy Bypass -File Setup.ps1`. Setup uses uv and may download Python 3.11 and packages. After setup, normal analysis works offline. PyAV is included alongside OpenCV so variable frame presentation timestamps can be retained during encoding.
