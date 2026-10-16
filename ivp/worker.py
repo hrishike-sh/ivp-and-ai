@@ -149,14 +149,16 @@ def process_video(run, frame_hook=None, final_hook=None):
                   "limitations": ["Quality and scene changes are heuristics.", "Road and colour masks do not classify traffic rules."]}
         if final_hook:
             report["ai"] = final_hook()
+        check_cancel(run)
         write_json(run / "report.json", report)
+        check_cancel(run)
         (run / "video.partial.mp4").unlink(missing_ok=True)
         update(run, "complete", progress=1, frames=frame_count, message="Video is ready.", duration=total_duration)
     except Cancelled:
         if encoder is not None:
             encoder.close()
             encoder = None
-        for name in ("video.partial.mp4", "processed.mp4"):
+        for name in ("video.partial.mp4", "processed.mp4", "report.json"):
             (run / name).unlink(missing_ok=True)
         update(run, "cancelled", progress=0, frames=frame_count, message="Cancelled. Original upload is unchanged.")
     except Exception as exc:

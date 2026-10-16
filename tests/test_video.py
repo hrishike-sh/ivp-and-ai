@@ -8,7 +8,7 @@ import av
 import numpy as np
 import pytest
 
-from ivp.jobs import read_status
+from ivp.jobs import cancel_job, read_status
 from ivp.media import MediaError, hidden_process_options, preview_frame, probe_video, tool_path, video_frames, write_json
 from ivp.pipeline import Settings
 from ivp.worker import process_video
@@ -221,6 +221,32 @@ def test_cancel_during_processing(source, tmp_path, monkeypatch):
     assert len(calls) == 3
     assert read_status(run)["state"] == "cancelled"
     assert not (run / "processed.mp4").exists()
+
+
+@pytest.mark.parametrize("phase", ["hook", "report"])
+def test_cancel_during_finalization_does_not_publish_video(source, tmp_path, monkeypatch, phase):
+    import ivp.worker as worker
+
+    run = request_run(tmp_path, source)
+    original = source.read_bytes()
+    original_write = worker.write_json
+
+    def finish():
+        if phase == "hook":
+            cancel_job(run)
+        return {"test_double": True}
+
+    def write_then_cancel(path, payload):
+        original_write(path, payload)
+        if phase == "report" and path == run / "report.json":
+            cancel_job(run)
+
+    monkeypatch.setattr(worker, "write_json", write_then_cancel)
+    process_video(run, final_hook=finish)
+    assert read_status(run)["state"] == "cancelled"
+    for name in ("processed.mp4", "video.partial.mp4", "report.json"):
+        assert not (run / name).exists()
+    assert source.read_bytes() == original
 
 
 def first_audio_time(path):

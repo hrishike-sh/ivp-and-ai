@@ -1,9 +1,11 @@
 import json
+import zipfile
 
 import numpy as np
 import pytest
 from PIL import Image
 
+from ivp.jobs import cancel_job, read_status
 from ivp.media import load_image, write_json
 from ivp.pipeline import Settings
 from traffic_ai.contracts import Detection, FrameAnalysis
@@ -62,3 +64,79 @@ def test_cancel_before_model_loading(tmp_path, monkeypatch):
     (tmp_path / "cancel.request").touch()
     process_run(tmp_path)
     assert json.loads((tmp_path / "status.json").read_text())["state"] == "cancelled"
+
+
+@pytest.fixture
+def image_request(tmp_path):
+    source = tmp_path / "original.png"
+    Image.fromarray(np.full((80, 120, 3), 80, np.uint8)).save(source)
+    run = tmp_path / "run"
+    run.mkdir()
+    write_json(run / "request.json", {"source": str(source), "info": {"kind": "image"},
+               "settings": Settings().to_dict()})
+    return source, run
+
+
+@pytest.mark.parametrize("phase", ["summary", "report"])
+def test_cancel_during_image_finalization_does_not_publish_result(image_request, monkeypatch, phase):
+    from traffic_ai import worker
+
+    source, run = image_request
+    original = source.read_bytes()
+    original_write = worker.write_json
+
+    class FinishingAnalyzer(FakeAnalyzer):
+        def summary(self):
+            if phase == "summary":
+                cancel_job(run)
+            return super().summary()
+
+    def write_then_cancel(path, payload):
+        original_write(path, payload)
+        if phase == "report" and path == run / "report.json":
+            cancel_job(run)
+
+    monkeypatch.setattr(worker, "Analyzer", FinishingAnalyzer)
+    monkeypatch.setattr(worker, "write_json", write_then_cancel)
+    process_run(run)
+    assert read_status(run)["state"] == "cancelled"
+    assert not (run / "processed.png").exists()
+    assert not (run / "report.json").exists()
+    assert source.read_bytes() == original
+
+
+@pytest.mark.parametrize("folder,archive_name", [("evidence", "evidence.zip"), ("scene_features", "scene_features.zip")])
+@pytest.mark.parametrize("cancel", [True, False], ids=["cancel", "complete"])
+def test_archive_packaging_honors_cancellation(image_request, monkeypatch, folder, archive_name, cancel):
+    from traffic_ai import worker
+
+    source, run = image_request
+    original = source.read_bytes()
+    contents = run / folder
+    if folder == "scene_features":
+        contents /= "0001"
+    contents.mkdir(parents=True)
+    for index in range(3):
+        Image.new("RGB", (5, 5), "gray").save(contents / f"{index}.png")
+    original_write = zipfile.ZipFile.write
+    written = []
+
+    def write_then_cancel(archive, filename, *args, **kwargs):
+        result = original_write(archive, filename, *args, **kwargs)
+        if archive.filename == str(run / archive_name):
+            written.append(filename)
+            if cancel:
+                cancel_job(run)
+        return result
+
+    monkeypatch.setattr(worker, "Analyzer", FakeAnalyzer)
+    monkeypatch.setattr(zipfile.ZipFile, "write", write_then_cancel)
+    process_run(run)
+    expected_count = 1 if cancel else 3
+    assert len(written) == expected_count
+    with zipfile.ZipFile(run / archive_name) as archive:
+        assert len(archive.namelist()) == expected_count
+    assert read_status(run)["state"] == ("cancelled" if cancel else "complete")
+    assert (run / "processed.png").exists() == (not cancel)
+    assert (run / "report.json").exists() == (not cancel)
+    assert source.read_bytes() == original

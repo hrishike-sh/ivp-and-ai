@@ -57,7 +57,7 @@ Colour settings stay fixed over the video; content-dependent operations such as 
 
 Selected video feature views are PNG samples, approximately once per second, packaged in a ZIP. All frames receive colour processing and quality measurements. Frame measurements and scene-change records stream to CSV. Downloads and video playback stream from disk via a tokenised localhost file server with HTTP Range support. The Streamlit uploader buffers the compressed upload, so the 1 GB upload limit is distinct from the worker's bounded frame memory. Preview caches are capped.
 
-One video worker is permitted at a time using an OS file lock. Cancellation is checked between frames and during final audio muxing. Interrupted workers are marked after a 30-second stale-status window when the OS lock is free. Restart the job from its original upload; partial runs are not presented as completed output. Closing the browser alone leaves a worker running; Stop.cmd requests cancellation.
+One video worker is permitted at a time using an OS file lock. Cancellation is checked between frames, during final audio muxing, between AI archive entries and before publishing completed results. Interrupted workers are marked after a 30-second stale-status window when the OS lock is free. Restart the job from its original upload; partial runs are not presented as completed output. Closing the browser alone leaves a worker running; Stop.cmd requests cancellation.
 
 ## Road candidates: limitations
 
