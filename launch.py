@@ -67,6 +67,27 @@ def startup_lock(timeout=35):
             release()
 
 
+def _cleanup_failed_start(process):
+    if process.poll() is None:
+        try:
+            process.terminate()
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+            process.wait(timeout=5)
+    saved = ROOT / "temp" / "server.json"
+    with contextlib.suppress(OSError, ValueError):
+        record = json.loads(saved.read_text(encoding="utf-8"))
+        if isinstance(record, dict) and record.get("pid") == process.pid:
+            saved.unlink()
+
+
 def _ensure_server():
     if not healthy():
         with socket.socket() as sock:
@@ -74,19 +95,25 @@ def _ensure_server():
                 raise SystemExit("Port 8511 is occupied by another service. Close it before starting Traffic Lab.")
         (ROOT / "temp").mkdir(exist_ok=True)
         options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
-        with (ROOT / "temp" / "server.log").open("ab") as log:
-            process = subprocess.Popen([sys.executable, "-m", "streamlit", "run", str(ROOT / "app.py"),
-                                        "--server.address", "127.0.0.1", "--server.port", "8511", "--server.headless", "true"],
-                                       cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, **options)
-        (ROOT / "temp" / "server.json").write_text(json.dumps({"pid": process.pid, "url": URL}), encoding="utf-8")
-        for _ in range(120):
-            if healthy():
-                break
-            if process.poll() is not None:
-                raise SystemExit("Server stopped during startup. See temp/server.log; rerun Setup.ps1 if dependencies are missing.")
-            time.sleep(0.25)
-        else:
-            raise SystemExit("Server is taking longer than expected. Check temp/server.log and retry Start.cmd.")
+        process = None
+        try:
+            with (ROOT / "temp" / "server.log").open("ab") as log:
+                process = subprocess.Popen([sys.executable, "-m", "streamlit", "run", str(ROOT / "app.py"),
+                                            "--server.address", "127.0.0.1", "--server.port", "8511", "--server.headless", "true"],
+                                           cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, **options)
+            (ROOT / "temp" / "server.json").write_text(json.dumps({"pid": process.pid, "url": URL}), encoding="utf-8")
+            for _ in range(120):
+                if healthy():
+                    break
+                if process.poll() is not None:
+                    raise SystemExit("Server stopped during startup. See temp/server.log; rerun Setup.ps1 if dependencies are missing.")
+                time.sleep(0.25)
+            else:
+                raise SystemExit("Server is taking longer than expected. Check temp/server.log and retry Start.cmd.")
+        except BaseException:
+            if process is not None:
+                _cleanup_failed_start(process)
+            raise
 
 
 def main():

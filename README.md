@@ -10,7 +10,7 @@ A local image and video processing application for the combined IVP and AI traff
 
 Double-click **Start.cmd**. It opens http://127.0.0.1:8511 in your browser. The server runs in the background on this computer only. Double-click **Stop.cmd** to stop the server and request cancellation of active video jobs.
 
-Overlapping Start actions wait for the current startup and reuse the same server, preserving the server PID used by Stop.cmd.
+Overlapping Start actions wait for the current startup and reuse the same server, preserving the server PID used by Stop.cmd. If startup fails, times out or is interrupted, the launcher stops its newly created server before another Start attempt can proceed. Details remain in `temp/server.log`.
 
 The isolated `.venv` uses Python 3.11. The system Python installation is unchanged. Dependencies are pinned in `requirements.txt`; `requirements.in` is the editable dependency specification. FFmpeg and ffprobe must be on PATH for video inspection and export.
 

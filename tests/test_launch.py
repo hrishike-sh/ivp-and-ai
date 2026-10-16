@@ -136,6 +136,118 @@ def test_healthy_server_is_reused_without_overwriting_its_pid(launcher, monkeypa
     assert saved.read_bytes() == original
 
 
+def test_pid_publication_failure_stops_the_new_child_and_preserves_another_pid(launcher, monkeypatch):
+    folder = launcher / "temp"
+    folder.mkdir()
+    saved = folder / "server.json"
+    original = json.dumps({"pid": os.getpid(), "url": launch.URL}).encode()
+    saved.write_bytes(original)
+    original_popen = subprocess.Popen
+    original_write = Path.write_text
+    children = []
+
+    def start_child(*args, **kwargs):
+        child = original_popen([sys.executable, "-c", "import sys; sys.stdin.read()"],
+                               stdin=subprocess.PIPE, **kwargs)
+        children.append(child)
+        return child
+
+    def fail_pid_write(path, *args, **kwargs):
+        if path == saved:
+            raise OSError("Cannot publish server PID")
+        return original_write(path, *args, **kwargs)
+
+    monkeypatch.setattr(launch, "healthy", lambda: False)
+    monkeypatch.setattr(subprocess, "Popen", start_child)
+    monkeypatch.setattr(Path, "write_text", fail_pid_write)
+    try:
+        with pytest.raises(OSError, match="Cannot publish server PID"):
+            launch.main()
+        assert len(children) == 1
+        assert children[0].poll() is not None
+        assert saved.read_bytes() == original
+    finally:
+        for child in children:
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=5)
+            child.stdin.close()
+
+
+class StartingServer:
+    pid = 4000
+
+    def __init__(self, *, stubborn=False, returncode=None):
+        self.stubborn = stubborn
+        self.returncode = returncode
+        self.terminated = False
+        self.killed = False
+        self.waits = []
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        self.terminated = True
+
+    def kill(self):
+        self.killed = True
+
+    def wait(self, timeout):
+        self.waits.append(timeout)
+        if self.stubborn and not self.killed:
+            raise subprocess.TimeoutExpired("test-server", timeout)
+        self.returncode = -9 if self.killed else -15
+        return self.returncode
+
+
+@pytest.mark.parametrize("stubborn", [False, True])
+def test_startup_timeout_stops_and_reaps_its_child_before_retry(launcher, monkeypatch, stubborn):
+    process = StartingServer(stubborn=stubborn)
+    monkeypatch.setattr(launch, "healthy", lambda: False)
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(launch, "time", SimpleNamespace(monotonic=launch.time.monotonic, sleep=lambda _: None))
+    with pytest.raises(SystemExit, match="taking longer than expected"):
+        launch.main()
+    assert process.terminated
+    assert process.killed == stubborn
+    assert process.waits == ([5, 5] if stubborn else [5])
+    assert process.poll() is not None
+    assert not (launcher / "temp" / "server.json").exists()
+    with launch.startup_lock(timeout=0):
+        pass
+
+
+def test_interrupted_startup_stops_its_child_and_removes_its_pid(launcher, monkeypatch):
+    process = StartingServer()
+    checks = []
+
+    def check_health():
+        checks.append(1)
+        if len(checks) > 1:
+            raise KeyboardInterrupt("Stop startup")
+        return False
+
+    monkeypatch.setattr(launch, "healthy", check_health)
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: process)
+    with pytest.raises(KeyboardInterrupt, match="Stop startup"):
+        launch.main()
+    assert process.terminated
+    assert process.waits == [5]
+    assert not (launcher / "temp" / "server.json").exists()
+
+
+def test_server_exit_during_startup_removes_its_pid_without_signalling_it(launcher, monkeypatch):
+    process = StartingServer(returncode=1)
+    monkeypatch.setattr(launch, "healthy", lambda: False)
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: process)
+    with pytest.raises(SystemExit, match="Server stopped during startup"):
+        launch.main()
+    assert not process.terminated
+    assert not process.killed
+    assert not (launcher / "temp" / "server.json").exists()
+
+
 def test_busy_startup_lock_times_out_and_releases_afterward(launcher):
     with launch.startup_lock():
         with pytest.raises(SystemExit, match="Another Traffic Lab launcher"):
