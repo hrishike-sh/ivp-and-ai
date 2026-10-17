@@ -1,4 +1,3 @@
-import hashlib
 import json
 import zipfile
 from pathlib import Path
@@ -8,7 +7,7 @@ import streamlit as st
 
 from ivp.downloads import FileServer
 from ivp.jobs import ROOT, cancel_job, history, new_run, now, refreshed_status, start_video
-from ivp.media import MediaError, load_image, png_bytes, preview_frame, probe_video, write_json
+from ivp.media import MediaError, load_image, png_bytes, preview_frame, probe_video, save_upload, write_json
 from ivp.pipeline import PRESETS, Settings, histogram, process_frame
 from classroom import SAMPLES, render_demo
 from ivp.workspace import comparison_wipe, run_details, source_name
@@ -112,19 +111,6 @@ def control_panel():
     except ValueError as exc:
         st.error(str(exc))
         st.stop()
-
-
-def save_upload(upload):
-    buffer = upload.getbuffer()
-    digest = hashlib.sha256(buffer).hexdigest()
-    folder = ROOT / "uploads" / digest[:20]
-    folder.mkdir(parents=True, exist_ok=True)
-    name = Path(upload.name.replace("\\", "/")).name
-    path = folder / name
-    if not path.exists():
-        with path.open("wb") as file:
-            file.write(buffer)
-    return path
 
 
 def download_links(run):
@@ -280,7 +266,7 @@ if page == "Workspace":
             upload_id = (getattr(upload, "file_id", upload.name) if upload is not None else
                          "demo_" + sample_path.name if sample_path is not None else st.session_state["upload_id"])
             if st.session_state.get("upload_id") != upload_id:
-                path = save_upload(upload) if upload is not None else sample_path
+                path = save_upload(upload, ROOT / "uploads") if upload is not None else sample_path
                 st.session_state["upload_path"] = str(path)
                 st.session_state["upload_id"] = upload_id
                 st.session_state.pop("image_export", None)

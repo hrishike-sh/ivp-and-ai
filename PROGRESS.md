@@ -1,5 +1,11 @@
 # Project progress
 
+## 18 October 2026 — publication validation
+
+Combined the local web studio, automatic tracking and optional incident review with all thirteen remote fixes through `f49f96a`. Preserved atomic uploads, image limits and orientation handling, job recovery, streamed downloads, cancellation/muxer cleanup and concurrent launcher protection. The launcher retains the current web server. Reconciled the Saved runs regression test with page navigation and preserved the expected missing-status response alongside transient-read retries.
+
+Final combined validation: **401 Python tests passed, 3 skipped** (55.27 s), **6 JavaScript tests passed**, JavaScript syntax, Python compilation and PowerShell parsing passed. The initial merged test run exposed two integration mismatches; both were repaired and the final full suite passed. Logs and the prepublication source snapshot are retained locally under `runs/publication-20261018/`. Generated media, runtime settings, models, environments and credentials are excluded from publication. This test run adds no new claims about real-traffic accuracy or physical speed accuracy.
+
 ## 18 October 2026 — optional incident review
 
 Added reviewable line/zone crossing, missed-stop and speeding candidates on automatic vehicle tracks. The UI/API take explicit geometry, conditions/timelines, speed threshold, calibration and timing confirmations. Neutral observations and withheld assessments remain separate from candidates. Unknown conditions, observation gaps and ambiguous tracking suppress conclusions. Evidence exports include thumbnails, JSONL/CSV, settings and coordinate mappings, with bounded in-memory state and image/index limits. Existing workflows remain opt-in and the original geometry helpers are preserved.
@@ -263,3 +269,109 @@ Fresh no-selection city run: `runs/20261017-222216-1995765e`, 600 frames, zero t
 ## October 17 overnight — crowded-scene association
 
 Default vehicle association now includes bottom-centre continuity alongside overlap. Full Delhi check improved from 15/16 with one ID change to 15/16 with no checked ID changes; missing bus remains. City retains 12/12. An additional street-intersection check improved from 5/7 to 6/7. App run `20261017-224901-37a58e31` is complete and browser-playable. Geometry/occlusion tests added; 201 Python tests pass. Reproduced and fixed early-rejection Windows socket resets in code; healthy live server left running, so that backend fix applies next launch. Next work: profile actual processing cost before choosing performance changes.
+
+## 13 October 2026 - preserve job updates during stale-status recovery
+
+Fixed a race in the shared IVP/AI job manager. A UI refresh could read a stale active status, acquire the worker lock after the worker finished or updated its status, and overwrite the newer status with `interrupted`. Completed exports then disappeared from the result panel and saved-run downloads. Recovery now rereads the status while holding the lock and only marks an active job interrupted when that latest status is still at least 30 seconds old.
+
+Six deterministic regressions reproduced the overwrite for completed, cancelled, failed, freshly queued, running and encoding statuses before the fix. They now preserve the complete latest status on disk and in the refresh result. An additional test confirms that a slow worker holding the OS lock retains its status; the existing interrupted-worker recovery test still passes.
+
+Validation used Python 3.11.17, the unchanged pinned IVP dependencies and FFmpeg 7.1.5 on Linux. The baseline suite passed 100 tests; the final suite passed 107 tests in 20.92 seconds, including app, video timing/audio, cancellation and recorded/synthetic AI checks. `python -m compileall -q app.py classroom.py launch.py ivp traffic_ai tests`, Ruff 0.17.0 correctness checks (`ruff check --select E9,F63,F7,F82 .`) and `git diff --check` passed. Windows launchers and live neural-model inference were not exercised by this change.
+
+## 14 October 2026 - record worker-start failures and allow immediate retry
+
+The shared IVP/AI launcher previously left a run `queued` when opening the worker log or starting its process raised an OS error. A real unusable-interpreter check reproduced the launch failure and confirmed that an immediate retry was blocked by the queued status for 30 seconds. The launcher now saves `failed` with the underlying error before releasing the job lock and raises a descriptive error for the interface. The original upload and request are retained for diagnosis and retry.
+
+Three regressions failed before the fix: real process-start errors for both IVP and AI, plus a real log-opening error. They now pass. Retry checks use a stubbed successful process creation to verify that a new run can immediately queue, keeps the correct worker module and leaves the previous failure intact. The focused job-control suite passes all 12 tests.
+
+Final validation reused Python 3.11.17, the pinned dependencies, FFmpeg/ffprobe and Ruff 0.17.0 on Linux: 110 tests passed in 9.81 seconds (baseline: 107), including app, video timing/audio, cancellation and recorded/synthetic AI checks. Compilation (`python -m compileall -q app.py classroom.py launch.py ivp traffic_ai tests`), Ruff correctness checks (`ruff check --select E9,F63,F7,F82 .`), all 44 installed-package compatibility checks and `git diff --check` passed. Windows launchers and live neural-model inference remain unverified in this environment.
+
+## 14 October 2026 - isolate unreadable saved job statuses
+
+A single saved status with the wrong JSON shape or a missing, invalid or timezone-free active timestamp could crash the UI refresh and prevent every new job from starting. Reproductions raised AttributeError, KeyError, TypeError and ValueError; a Streamlit AppTest also confirmed the UI crash. Status reads now require a JSON object and a timezone-aware timestamp for queued, running and encoding jobs. Unreadable records return an explicit unknown state with instructions to start a new run, while the original status file is preserved.
+
+Eight parsing regressions and the app regression failed before the fix and now pass. Tests verify new-job startup with an unreadable saved record, continued protection by the OS worker lock, unchanged original files and access to other completed runs. Completed, cancelled and failed records remain readable without timestamps, and a missing status file still reports that it is waiting for the worker. Startup in these new tests uses a stubbed process; no model downloads or inference are required.
+
+Validation on the established Linux environment: 29 focused job/app tests passed; the final full suite passed 123 tests in 11.05 seconds (baseline: 110). Compilation (`python -m compileall -q app.py classroom.py launch.py ivp traffic_ai tests`), Ruff 0.17.0 correctness checks (`ruff check --select E9,F63,F7,F82 .`), compatibility checks for all 44 installed packages and `git diff --check` passed. Python 3.11.17 and the pinned dependencies were reused. Windows launchers and live model inference remain unverified here.
+
+## 14 October 2026 - discard rule evidence across tracking jumps
+
+The rule engine retained motion and red-entry history across position jumps that the existing trajectory and turn-entry trackers already rejected. Synthetic observations reproduced unsupported red-light crossing, wrong-way and restricted-entry decisions, plus later stopped encroachment attributed to a pre-jump red entry. Rule history now applies the same continuity bound: a ground-point displacement greater than five times the current vehicle box width, with an eight-pixel minimum width, clears that track's history and prior stop-line entry.
+
+Six regressions failed before the fix and now pass. Affected motion rules return cannot_assess until fresh continuous observations support a decision. Tests also verify that continuous post-jump movement can establish new evidence and that another tracked vehicle's legitimate crossing is retained. All 45 focused rule, trajectory, turn-context, event and worker tests pass.
+
+Final validation on the existing Linux/Python 3.11.17 environment: 129 tests passed in 17.38 seconds (baseline: 123). Compilation (`python -m compileall -q app.py classroom.py launch.py ivp traffic_ai tests`), Ruff 0.17.0 correctness checks (`ruff check --select E9,F63,F7,F82 .`), compatibility checks for all 44 installed packages and `git diff --check` passed. These are synthetic logic checks, not real-traffic accuracy measurements. The inherited continuity heuristic can discard genuine fast movement; unresolved motion remains cannot_assess. Windows launchers and live model inference were not exercised.
+
+## 15 October 2026 - preserve mirrored video display orientation
+
+FFmpeg-generated clips exposed an orientation error: previews and worker frames used only the display matrix's rotation and discarded its reflection. Eight mirrored cases disagreed with FFmpeg's displayed frames, while four rotation-only cases matched. The shared media adapters now detect reflection from the matrix, apply it before the quarter-turn rotation and record `reflected` in probed source information. Both incremental decoding (including the final frame) and previews use the same correction; metadata without the new field remains readable.
+
+Twelve regression cases failed before the fix: eight mirrored preview cases and four worker/AI-frame-hook export cases. All 16 new cases now pass. Generated video tests compare every decoded RGB frame against FFmpeg's display-oriented output for four rotations with horizontal, vertical or no reflection. Full H.264/AAC exports verify orientation is applied once, presentation timestamps and audio are retained, AI hooks receive the same oriented pixels and source bytes remain unchanged. All 28 video tests pass.
+
+The interpretation was checked against FFmpeg 7.1's [display-matrix utilities](https://ffmpeg.org/doxygen/7.1/display_8c_source.html) and [automatic orientation filters](https://ffmpeg.org/doxygen/7.1/ffmpeg__filter_8c_source.html), plus the installed FFmpeg 7.1.5 decoder. The supported correction covers quarter-turn rotations and reflections; arbitrary affine warps are outside this change.
+
+Final validation reused Python 3.11.17 and the pinned dependencies on Linux: 145 tests passed in 29.73 seconds (baseline: 129). Compilation (`python -m compileall -q app.py classroom.py launch.py ivp traffic_ai tests`), Ruff 0.17.0 correctness checks (`ruff check --select E9,F63,F7,F82 .`), compatibility checks for all 44 installed packages and `git diff --check` passed. Fixtures use generated video/audio and an AI frame hook; Windows launchers and live neural-model inference were not exercised.
+
+## 15 October 2026 - retain brightness in unsigned 16-bit grayscale PNGs
+
+A real generated 16-bit grayscale PNG exposed clipping in the shared image loader: a gradient equivalent to 8-bit levels 0, 1, 32, 64, 96, 128, 192 and 255 decoded as black followed by seven white pixels. The AI image worker received those clipped values too. The loader now rounds the full unsigned 0–65535 range to 0–255 before RGB conversion, using wider arithmetic to preserve the white endpoint. Grayscale transparency is matched against original samples before quantization so nearby opaque values remain opaque.
+
+Eight regression cases failed before the fix and now pass. Ten new cases cover equivalent 8-bit/16-bit gradients, dark and narrow ranges, black/white endpoints, rounding boundaries, EXIF orientation, two native transparency keys and the AI image worker. The tests verify normal IVP measurements, correctly decoded AI inputs, reopenable outputs, coordinate mappings and unchanged source files. All 25 focused pipeline/image-worker tests pass.
+
+Final validation on the established Linux/Python 3.11.17 environment: 155 tests passed in 22.97 seconds (baseline: 145). Compilation (`python -m compileall -q app.py classroom.py launch.py ivp traffic_ai tests`), Ruff 0.17.0 correctness checks (`ruff check --select E9,F63,F7,F82 .`), compatibility checks for all 44 installed packages and `git diff --check` passed. The processing pipeline remains 8-bit RGB, with expected quantization of the original 16-bit samples; original files retain their full precision. Fixtures are generated images and the AI analyzer is a test double. Windows launchers and live neural-model inference were not exercised.
+
+## 15 October 2026 - prepare download headers from the opened file
+
+A real localhost HTTP request reproduced a truncated download: the server advertised 22 bytes, the file changed before opening, and the client received only 3 bytes with IncompleteRead. Range responses could similarly advertise the old total size. Missing or unreadable files could also produce broken connections after a success response had begun. Downloads now open the file before sending headers, use that handle's size for Content-Length and Content-Range, and stream from the same handle. Lookup and opening failures return 404 for GET and HEAD; the handle closes even on HEAD and invalid-range responses.
+
+Ten new HTTP tests cover changes before opening, full/ranged responses, deletion, lookup/open permission errors, atomic replacement after opening and descriptor cleanup. Seven failure cases were reproduced before their fixes; the remaining cases protect existing behavior and resource cleanup. The replacement-after-open test is POSIX-specific because Windows prevents that replacement while this reader is open. All ten cases passed on Linux, alongside the existing app/download checks.
+
+Final validation reused Python 3.11.17 and the pinned dependencies: 165 tests passed in 30.33 seconds (baseline: 155). Compilation (`python -m compileall -q app.py classroom.py launch.py ivp traffic_ai tests`), Ruff 0.17.0 correctness checks (`ruff check --select E9,F63,F7,F82 .`), compatibility checks for all 44 installed packages and `git diff --check` passed. Tests make actual loopback HTTP requests with controlled temporary-file races. This fixes request preparation; it does not freeze in-place writes after streaming has begun. Windows launchers and live neural-model inference were not exercised.
+
+## 16 October 2026 - honor cancellation during result finalization
+
+Cancellation requests during final callbacks, AI summaries and report writing were ignored, allowing image and video runs to become complete. AI archive packaging also copied every remaining file after a request. Workers now check cancellation between archive entries, after summaries and around final report publication. Cancelled runs remove their final media and report instead of publishing completed results; partial diagnostic archives and frame records remain subject to the existing cancelled-run policy.
+
+Six regressions reproduced the failures before the fix. Eight new cases now verify late image/video cancellation, stopping evidence and scene-feature archives after the current entry, unchanged source files and successful archive completion when no cancellation is requested. Video cases use actual FFmpeg encoding/muxing; image cases use generated PNGs, real ZIP files and a test analyzer. All 39 focused video/image-worker tests pass.
+
+Final validation on the established Linux/Python 3.11.17 environment: 173 tests passed in 27.96 seconds (baseline: 165). Compilation (`python -m compileall -q app.py classroom.py launch.py ivp traffic_ai tests`), Ruff 0.17.0 correctness checks (`ruff check --select E9,F63,F7,F82 .`), compatibility checks for all 44 installed packages and `git diff --check` passed. Cancellation remains cooperative: an individual encode, inference or archive write may finish before the request is observed. Windows launchers and live neural-model inference were not exercised.
+
+## 16 October 2026 - serialize overlapping app launches
+
+A controlled overlap reproduced two server process starts from concurrent launcher calls, allowing competing writes to the PID record used by Stop.cmd. Another case showed a second launcher reporting success while the first had a healthy server but had not yet saved its PID. Startup now holds an OS file lock through the health check, process creation, PID publication and readiness wait. Waiting launchers then recheck health and reuse the server. Contention times out with an actionable message after 35 seconds; unexpected locking errors remain visible.
+
+Nine new launcher cases cover both races, healthy-server reuse, retry after startup failure, timeout and recovery, exclusion across real Python processes, simulated Windows byte-lock retries/unlocking, and unexpected POSIX locking errors. The API usage follows Python 3.11's [Windows file-lock documentation](https://docs.python.org/3.11/library/msvcrt.html#msvcrt.locking) and [POSIX locking documentation](https://docs.python.org/3.11/library/fcntl.html#fcntl.flock). Native POSIX lock behavior is exercised; Windows locking calls are simulated.
+
+Final validation reused the established Linux/Python 3.11.17 environment and pinned dependencies: 182 tests passed in 30.40 seconds (baseline: 173). Compilation (`python -m compileall -q app.py classroom.py launch.py ivp traffic_ai tests`), Ruff 0.17.0 correctness checks (`ruff check --select E9,F63,F7,F82 .`), compatibility checks for all 44 installed packages and `git diff --check` passed. Server process creation and health responses are stubbed in launcher tests. Native Windows start/stop behavior and live AI inference were not exercised.
+
+## 16 October 2026 - stop server children after failed app startup
+
+A real Python child remained alive when saving the server PID raised an OS error. Readiness timeouts and interrupted startup also left their new server running, while an early server exit left its PID record behind. The launcher now stops and waits for only the child created by that startup attempt before releasing the startup lock. It escalates from terminate to kill after a bounded wait, removes the saved PID only when it identifies that child, and retains the server log. Existing healthy servers and unrelated PID records are preserved.
+
+Five new regression cases failed before the fix and now pass. They cover an actual child process with an unwritable PID record, ordinary and stubborn children on readiness timeout, interrupted startup and early server exit. The real-child test preserves an unrelated PID record and always reaps its test child, including on assertion failure. All 14 launcher cases pass; no Streamlit server or AI model is started by these tests.
+
+Final validation reused the established Linux/Python 3.11.17 environment and pinned dependencies: 187 tests passed in 36.00 seconds (baseline: 182 in 39.47 seconds). Compilation (`python -m compileall -q app.py classroom.py launch.py ivp traffic_ai tests`), Ruff 0.17.0 correctness checks (`ruff check --select E9,F63,F7,F82 .`), compatibility checks for all 44 installed packages and `git diff --check` passed. Real child termination is exercised on Linux; timeout, kill escalation and interruption use controlled process doubles. Native Windows start/stop behavior and live AI inference remain unverified here.
+
+## 17 October 2026 - publish complete uploads before reuse
+
+An interrupted upload write left a truncated file at the path reused by later attempts. A controlled overlap also let a second upload return the first 20 bytes of a PNG while the first copy was still writing. Upload saving now stages each new copy in a private temporary directory on the destination filesystem, closes the complete file, then publishes it with a rename. Failed writes clean up their staging files. A completed copy published by another session is reused. The save helper moved from the interface to `ivp.media` so disk behavior can be tested directly.
+
+Three regressions failed before the fix: interrupted writes, close failures and reuse during a paused write. Five new cases now verify clean retry and actual PNG decoding, overlapping uploads, reuse without rewriting an existing file, and preservation of different contents sharing a filename, including a Windows-style upload name. All 10 focused upload/app tests pass. Fixtures and fault injection use temporary files; existing project uploads and runs were not modified.
+
+Final validation reused the established Linux/Python 3.11.17 environment and pinned dependencies: 192 tests passed in 31.06 seconds (baseline: 187 in 31.44 seconds). Compilation (`python -m compileall -q app.py classroom.py launch.py ivp traffic_ai tests`), Ruff 0.17.0 correctness checks (`ruff check --select E9,F63,F7,F82 .`), compatibility checks for all 44 installed packages and `git diff --check` passed. This prevents new partial publications; previously incomplete cached files are not repaired automatically. Power-loss durability, native Windows file behavior and live AI inference were not exercised.
+
+## 17 October 2026 - reap stubborn muxers during worker cleanup
+
+A final muxer that ignored termination outlived cancelled or failed video processing. The cleanup wait timed out, replacing the cancellation or original monitoring error and releasing the worker lock while the child remained alive. The shared IVP/AI video worker now follows its existing ten-second termination wait with a forced kill and another bounded wait. Successful cleanup preserves the original cancellation or failure, and cancelled runs remove their final media and report as before.
+
+Three regressions failed before the fix. Five new cases cover cancellation and monitoring errors with cooperative and stubborn process doubles, plus a real Python child standing in for a muxer and ignoring POSIX SIGTERM. The real-child case shortens the first wait to 0.1 seconds and always reaps its child in test cleanup. Video decoding and initial encoding use actual synthetic media; original source bytes remain unchanged. All 44 focused video/AI worker tests pass.
+
+Final validation reused the established Linux/Python 3.11.17 environment and pinned dependencies: 197 tests passed in 32.23 seconds (baseline: 192 in 35.85 seconds). Compilation (`python -m compileall -q app.py classroom.py launch.py ivp traffic_ai tests`), Ruff 0.17.0 correctness checks (`ruff check --select E9,F63,F7,F82 .`), compatibility checks for all 44 installed packages and `git diff --check` passed. Stubborn-muxer behavior is controlled in tests; no real FFmpeg hang or live AI model is required. Native Windows process behavior and live AI inference remain unverified here.
+
+## 17 October 2026 - reject oversized images before decoding
+
+The image loader proceeded into pixel decoding when Pillow warned that an image exceeded its configured pixel threshold. When warnings were promoted to errors, the raw Pillow warning escaped instead of providing media error guidance. Image loading now checks header dimensions against `Image.MAX_IMAGE_PIXELS` before EXIF transposition triggers decoding, and translates warning exceptions into an actionable resize message. The application does not change global warning filters. Scope is image-header validation and error translation.
+
+Four regressions failed before the fix. Eight new PNG/JPEG cases verify rejection before pixel decoding, resize guidance when warnings become errors, successful decoding exactly at the threshold and continued handling above Pillow's hard limit. Fixtures are small images with a lowered test limit; all original bytes remain unchanged. All 39 focused image/pipeline worker tests pass. An AST comparison confirms that the media module is identical outside `load_image`.
+
+Final validation reused the established Linux/Python 3.11.17 environment and pinned dependencies: 205 tests passed in 33.46 seconds (baseline: 197 in 38.20 seconds). Compilation (`python -m compileall -q app.py classroom.py launch.py ivp traffic_ai tests`), Ruff 0.17.0 correctness checks (`ruff check --select E9,F63,F7,F82 .`), compatibility checks for all 44 installed packages and `git diff --check` passed. Tests avoid allocating oversized images. Native Windows behavior, live AI inference and the unavailable desktop's unfinished changes were not integration-tested.

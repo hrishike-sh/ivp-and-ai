@@ -60,32 +60,44 @@ def new_run():
 def read_status(run):
     for attempt in range(3):
         try:
-            return json.loads((Path(run) / "status.json").read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            state = json.loads((Path(run) / "status.json").read_text(encoding="utf-8"))
+            if not isinstance(state, dict):
+                raise ValueError("Job status must be a JSON object.")
+            if state.get("state") in ("queued", "running", "encoding"):
+                updated_at = datetime.fromisoformat(state["updated_at"])
+                if updated_at.tzinfo is None:
+                    raise ValueError("Active job timestamps must include a timezone.")
+            return state
+        except (OSError, json.JSONDecodeError) as exc:
             if attempt < 2:
                 time.sleep(.01)
-    return {"state": "unknown", "message": "Waiting for job status; retrying automatically."}
+                continue
+            message = ("Waiting for job status." if isinstance(exc, FileNotFoundError) else
+                       "Waiting for job status; retrying automatically." if isinstance(exc, OSError)
+                       else "Job status is unreadable. Start a new run from the original upload.")
+            return {"state": "unknown", "message": message}
+        except (ValueError, TypeError, KeyError):
+            return {"state": "unknown", "message": "Job status is unreadable. Start a new run from the original upload."}
+
+
+def _is_stale_status(state):
+    if state.get("state") not in ("queued", "running", "encoding"):
+        return False
+    age = (datetime.now(timezone.utc) - datetime.fromisoformat(state["updated_at"])).total_seconds()
+    return age >= 30
 
 
 def refreshed_status(run):
     state = read_status(run)
-    if state.get("state") not in ("queued", "running", "encoding"):
-        return state
-    age = (datetime.now(timezone.utc) - datetime.fromisoformat(state["updated_at"])).total_seconds()
-    if age < 30:
+    if not _is_stale_status(state):
         return state
     try:
         with job_lock():
-            # The worker may have finished between the first read and lock
-            # acquisition. Never replace its newer result with stale recovery.
+            # A worker may have updated or finished since the initial status read.
             state = read_status(run)
-            if state.get("state") not in ("queued", "running", "encoding"):
-                return state
-            age = (datetime.now(timezone.utc) - datetime.fromisoformat(state["updated_at"])).total_seconds()
-            if age < 30:
-                return state
-            state = {**state, "state": "interrupted", "message": "Worker stopped unexpectedly. Start a new run from the original upload.", "updated_at": now()}
-            write_json(Path(run) / "status.json", state)
+            if _is_stale_status(state):
+                state = {**state, "state": "interrupted", "message": "Worker stopped unexpectedly. Start a new run from the original upload.", "updated_at": now()}
+                write_json(Path(run) / "status.json", state)
     except RuntimeError:
         pass
     return state
@@ -122,9 +134,14 @@ def start_video(path, info, settings, selected_masks, ai=False, motion=None):
                    "settings": settings.to_dict(), "selected_masks": selected_masks, "created_at": now(), "ai": ai,
                    'motion': motion})
         write_json(run / "status.json", {"state": "queued", "progress": 0, "updated_at": now(), "message": "Starting video worker."})
-        with (run / "worker.log").open("wb") as log:
-            process = subprocess.Popen([executable, "-m", module, str(run)], cwd=ROOT,
-                                       stdout=log, stderr=subprocess.STDOUT, **hidden_process_options())
+        try:
+            with (run / "worker.log").open("wb") as log:
+                process = subprocess.Popen([executable, "-m", module, str(run)], cwd=ROOT,
+                                           stdout=log, stderr=subprocess.STDOUT, **hidden_process_options())
+        except OSError as exc:
+            message = f"Could not start the processing worker: {exc}"
+            write_json(run / "status.json", {"state": "failed", "progress": 0, "updated_at": now(), "message": message})
+            raise RuntimeError(message) from exc
         write_json(run / "process.json", {"pid": process.pid})
         return run
 

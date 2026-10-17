@@ -1,14 +1,18 @@
 import csv
 import json
+import os
 import subprocess
+import sys
+import time
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import av
 import numpy as np
 import pytest
 
-from ivp.jobs import read_status
+from ivp.jobs import cancel_job, read_status
 from ivp.media import MediaError, hidden_process_options, preview_frame, probe_video, tool_path, video_frames, write_json
 from ivp.pipeline import Settings
 from ivp.worker import process_video
@@ -36,6 +40,13 @@ def source(tmp_path):
 def stamps(path):
     with av.open(str(path)) as container:
         return [float(frame.pts * frame.time_base) for frame in container.decode(video=0)]
+
+
+def ffmpeg_display_frames(path, info):
+    result = subprocess.run([tool_path("ffmpeg"), "-hide_banner", "-loglevel", "error", "-i", str(path),
+                             "-map", "0:v:0", "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"],
+                            check=True, capture_output=True, **hidden_process_options())
+    return np.frombuffer(result.stdout, np.uint8).reshape(-1, info["height"], info["width"], 3)
 
 
 def test_audio_timing_masks_and_output(source, tmp_path):
@@ -163,6 +174,54 @@ def test_rotation_metadata_applied_once(source, tmp_path):
     assert np.abs(output.astype(float) - preview.astype(float)).mean() < 8
 
 
+@pytest.mark.parametrize("rotation", [0, 90, 180, 270])
+@pytest.mark.parametrize("flip", [None, "h", "v"], ids=["rotation-only", "horizontal", "vertical"])
+def test_display_orientation_matches_ffmpeg(source, tmp_path, rotation, flip):
+    oriented = tmp_path / "oriented.mp4"
+    flip_args = ["-display_" + flip + "flip"] if flip else []
+    ffmpeg("-display_rotation", rotation, *flip_args, "-i", source, "-c", "copy", oriented)
+    info = probe_video(oriented)
+    expected = ffmpeg_display_frames(oriented, info)
+    preview, timestamp = preview_frame(oriented, info, 0)
+    assert timestamp == 0
+    assert np.array_equal(preview, expected[0])
+    frames = list(video_frames(oriented, info))
+    assert np.array_equal(np.stack([rgb for rgb, *_ in frames]), expected)
+    assert [stamp for _, stamp, *_ in frames] == pytest.approx(stamps(oriented), abs=2 / 90000)
+    if flip is None:
+        legacy_info = {key: value for key, value in info.items() if key != "reflected"}
+        assert np.array_equal(preview_frame(oriented, legacy_info, 0)[0], expected[0])
+        assert np.array_equal(next(video_frames(oriented, legacy_info))[0], expected[0])
+
+
+@pytest.mark.parametrize("rotation,flip", [(0, "h"), (90, "h"), (0, "v"), (90, "v")])
+def test_reflected_export_and_ai_frames_keep_display_orientation(source, tmp_path, rotation, flip):
+    oriented = tmp_path / "reflected.mp4"
+    ffmpeg("-display_rotation", rotation, "-display_" + flip + "flip", "-i", source, "-c", "copy", oriented)
+    original = oriented.read_bytes()
+    info = probe_video(oriented)
+    expected = ffmpeg_display_frames(oriented, info)
+    run = request_run(tmp_path, oriented)
+
+    def hook(result, original_rgb, index, distance):
+        assert np.array_equal(original_rgb, expected[index])
+        assert np.array_equal(result.color_rgb, expected[index])
+        return result.color_rgb
+
+    process_video(run, frame_hook=hook)
+    assert read_status(run)["state"] == "complete"
+    output = run / "processed.mp4"
+    output_info = probe_video(output)
+    assert output_info["rotation"] == 0
+    assert output_info["reflected"] is False
+    assert output_info["has_audio"]
+    output_frames = np.stack([rgb for rgb, *_ in video_frames(output, output_info)])
+    assert output_frames.shape == expected.shape
+    assert np.abs(output_frames.astype(float) - expected.astype(float)).mean() < 8
+    assert stamps(output) == pytest.approx(stamps(oriented), abs=2 / 90000)
+    assert oriented.read_bytes() == original
+
+
 def test_odd_resize_padding(source, tmp_path):
     run = request_run(tmp_path, source, Settings(max_width=101))
     process_video(run)
@@ -190,6 +249,144 @@ def test_cancel_during_processing(source, tmp_path, monkeypatch):
     assert len(calls) == 3
     assert read_status(run)["state"] == "cancelled"
     assert not (run / "processed.mp4").exists()
+
+
+@pytest.mark.parametrize("stubborn", [False, True])
+@pytest.mark.parametrize("cancelled", [False, True], ids=["monitor-error", "cancel"])
+def test_mux_shutdown_preserves_cancellation_or_monitoring_error(source, tmp_path, monkeypatch, stubborn, cancelled):
+    import ivp.worker as worker
+
+    run = request_run(tmp_path, source)
+    original = source.read_bytes()
+    started = False
+    original_check = worker.check_cancel
+
+    class Muxer:
+        returncode = None
+        terminated = False
+        killed = False
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.terminated = True
+
+        def kill(self):
+            self.killed = True
+
+        def wait(self, timeout):
+            if stubborn and not self.killed:
+                raise subprocess.TimeoutExpired("test-muxer", timeout)
+            self.returncode = -9 if self.killed else -15
+            return self.returncode
+
+    process = Muxer()
+
+    def start_muxer(*args, **kwargs):
+        nonlocal started
+        started = True
+        (run / "processed.mp4").write_bytes(b"Incomplete mux output")
+        if cancelled:
+            cancel_job(run)
+        return process
+
+    def check_cancel(path):
+        if started and not cancelled:
+            raise RuntimeError("Mux monitoring interrupted")
+        original_check(path)
+
+    monkeypatch.setattr(worker.subprocess, "Popen", start_muxer)
+    monkeypatch.setattr(worker, "check_cancel", check_cancel)
+    if cancelled:
+        process_video(run)
+        assert read_status(run)["state"] == "cancelled"
+        for name in ("processed.mp4", "video.partial.mp4", "report.json"):
+            assert not (run / name).exists()
+    else:
+        with pytest.raises(RuntimeError, match="Mux monitoring interrupted"):
+            process_video(run)
+        assert read_status(run)["state"] == "failed"
+        assert read_status(run)["message"] == "Mux monitoring interrupted"
+    assert process.terminated
+    assert process.killed == stubborn
+    assert process.poll() is not None
+    assert source.read_bytes() == original
+
+
+@pytest.mark.skipif(os.name == "nt", reason="This case exercises a real child ignoring POSIX SIGTERM.")
+def test_cancelled_muxer_that_ignores_termination_is_reaped(source, tmp_path, monkeypatch):
+    import ivp.worker as worker
+
+    run = request_run(tmp_path, source)
+    original = source.read_bytes()
+    original_popen = subprocess.Popen
+    children = []
+    waits = []
+
+    def start_muxer(*args, **kwargs):
+        ready = run / "muxer.ready"
+        code = ("import signal,sys; from pathlib import Path; "
+                "signal.signal(signal.SIGTERM,signal.SIG_IGN); "
+                "Path(sys.argv[1]).write_text('ready'); sys.stdin.read()")
+        child = original_popen([sys.executable, "-c", code, str(ready)], stdin=subprocess.PIPE, **kwargs)
+        children.append(child)
+        deadline = time.monotonic() + 5
+        while not ready.exists():
+            assert child.poll() is None and time.monotonic() < deadline
+            time.sleep(.01)
+        (run / "processed.mp4").write_bytes(b"Incomplete mux output")
+        cancel_job(run)
+
+        def wait(timeout):
+            waits.append(timeout)
+            # Exercise a real ignored signal without spending ten seconds per test.
+            return child.wait(timeout=.1 if len(waits) == 1 else timeout)
+
+        return SimpleNamespace(poll=child.poll, terminate=child.terminate, kill=child.kill, wait=wait)
+
+    monkeypatch.setattr(worker.subprocess, "Popen", start_muxer)
+    try:
+        process_video(run)
+        assert read_status(run)["state"] == "cancelled"
+        assert len(children) == 1
+        assert children[0].poll() is not None
+        assert len(waits) == 2
+        for name in ("processed.mp4", "video.partial.mp4", "report.json"):
+            assert not (run / name).exists()
+        assert source.read_bytes() == original
+    finally:
+        for child in children:
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=5)
+            child.stdin.close()
+
+
+@pytest.mark.parametrize("phase", ["hook", "report"])
+def test_cancel_during_finalization_does_not_publish_video(source, tmp_path, monkeypatch, phase):
+    import ivp.worker as worker
+
+    run = request_run(tmp_path, source)
+    original = source.read_bytes()
+    original_write = worker.write_json
+
+    def finish():
+        if phase == "hook":
+            cancel_job(run)
+        return {"test_double": True}
+
+    def write_then_cancel(path, payload):
+        original_write(path, payload)
+        if phase == "report" and path == run / "report.json":
+            cancel_job(run)
+
+    monkeypatch.setattr(worker, "write_json", write_then_cancel)
+    process_video(run, final_hook=finish)
+    assert read_status(run)["state"] == "cancelled"
+    for name in ("processed.mp4", "video.partial.mp4", "report.json"):
+        assert not (run / name).exists()
+    assert source.read_bytes() == original
 
 
 def first_audio_time(path):

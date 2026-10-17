@@ -79,6 +79,60 @@ def test_grayscale_alpha_and_exif(tmp_path):
     assert load_image(photo).shape == (30, 20, 3)
 
 
+@pytest.mark.parametrize("gray", [
+    [[0, 1, 32, 64], [96, 128, 192, 255]],
+    [[0, 1, 2], [3, 4, 5]],
+    [[126, 127], [128, 129]],
+    [[0, 0], [0, 0]],
+    [[255, 255], [255, 255]],
+], ids=["gradient", "dark", "narrow-range", "black", "white"])
+def test_16bit_grayscale_matches_equivalent_8bit_image(tmp_path, gray):
+    gray = np.array(gray, dtype=np.uint8)
+    eight_bit = tmp_path / "eight.png"
+    sixteen_bit = tmp_path / "sixteen.png"
+    Image.fromarray(gray).save(eight_bit)
+    Image.fromarray(gray.astype(np.uint16) * 257).save(sixteen_bit)
+    original = sixteen_bit.read_bytes()
+    expected = load_image(eight_bit)
+    actual = load_image(sixteen_bit)
+    assert actual.dtype == np.uint8
+    assert np.array_equal(actual, expected)
+    processed = process_frame(actual)
+    assert np.array_equal(processed.color_rgb, expected)
+    assert processed.measurements == process_frame(expected).measurements
+    assert sixteen_bit.read_bytes() == original
+
+
+def test_16bit_grayscale_rounding_and_full_range(tmp_path):
+    path = tmp_path / "rounding.png"
+    gray = np.array([[0, 128, 129, 256], [257, 32768, 65534, 65535]], dtype=np.uint16)
+    Image.fromarray(gray).save(path)
+    expected = np.array([[0, 0, 1, 1], [1, 128, 255, 255]], dtype=np.uint8)
+    assert np.array_equal(load_image(path), np.repeat(expected[:, :, None], 3, axis=2))
+
+
+def test_16bit_grayscale_retains_exif_orientation(tmp_path):
+    path = tmp_path / "oriented.png"
+    gray = np.array([[0, 1, 32, 64], [96, 128, 192, 255]], dtype=np.uint16)
+    exif = Image.Exif()
+    exif[274] = 6
+    Image.fromarray(gray * 257).save(path, exif=exif)
+    expected = np.array([[96, 0], [128, 1], [192, 32], [255, 64]], dtype=np.uint8)
+    assert np.array_equal(load_image(path), np.repeat(expected[:, :, None], 3, axis=2))
+
+
+@pytest.mark.parametrize("transparent,expected", [
+    (0, [[255, 0, 128], [128, 128, 255]]),
+    (32768, [[0, 0, 255], [128, 128, 255]]),
+])
+def test_16bit_grayscale_transparency_uses_original_samples(tmp_path, transparent, expected):
+    path = tmp_path / "transparent.png"
+    gray = np.array([[0, 1, 32768], [32896, 32769, 65535]], dtype=np.uint16)
+    Image.fromarray(gray).save(path, transparency=transparent)
+    expected = np.array(expected, dtype=np.uint8)
+    assert np.array_equal(load_image(path), np.repeat(expected[:, :, None], 3, axis=2))
+
+
 def test_dark_quality_and_scene_change():
     dark = np.full((40, 60, 3), 20, np.uint8)
     assert "Dark frame" in quality(dark)["flags"]

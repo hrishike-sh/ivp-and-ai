@@ -83,7 +83,10 @@ class RuleEngine:
         if track and timestamp <= track[-1][0]:
             raise ValueError("Tracked timestamps must increase; reset tracks at a new clip or scene")
         context = (repr(scene.stop_line), repr(scene.approach_polygon), scene.stationary_camera)
-        if track and (timestamp - track[-1][0] > .75 or self.track_context.get(vehicle.track_id) != context):
+        # Match the continuity limit used by trajectory and turn-entry tracking.
+        if track and (timestamp - track[-1][0] > .75 or self.track_context.get(vehicle.track_id) != context
+                      or hypot(point[0] - track[-1][1][0], point[1] - track[-1][1][1])
+                      > 5 * max(8., vehicle.box[2] - vehicle.box[0])):
             track.clear()
             self.stop_entries.pop(vehicle.track_id, None)
         if video and vehicle.track_id is not None:

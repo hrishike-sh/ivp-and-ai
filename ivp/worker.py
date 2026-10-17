@@ -135,7 +135,11 @@ def process_video(run, frame_hook=None, final_hook=None, final_key='ai'):
                     time.sleep(0.1)
             except BaseException:
                 process.terminate()
-                process.wait(timeout=10)
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=10)
                 raise
         if process.returncode:
             detail = (run / "ffmpeg.log").read_text(encoding="utf-8", errors="replace")[-700:]
@@ -153,6 +157,7 @@ def process_video(run, frame_hook=None, final_hook=None, final_key='ai'):
             report[final_key] = final_hook()
         check_cancel(run)
         write_json(run / "report.json", report)
+        check_cancel(run)
         (run / "video.partial.mp4").unlink(missing_ok=True)
         update(run, "complete", progress=1, frames=frame_count, message="Video is ready.", duration=total_duration)
     except Cancelled:

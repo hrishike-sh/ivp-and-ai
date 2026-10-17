@@ -46,6 +46,28 @@ def test_completed_ai_run_exposes_scene_observations(tmp_path):
     assert any("Assessment" in frame.value.columns and "cannot assess" in frame.value["Assessment"].values for frame in app.dataframe)
 
 
+def test_unreadable_saved_run_does_not_hide_completed_results(tmp_path, monkeypatch):
+    import ivp.jobs as jobs
+
+    monkeypatch.setattr(jobs, "RUNS", tmp_path)
+    unreadable = tmp_path / "unreadable"
+    unreadable.mkdir()
+    write_json(unreadable / "status.json", {"state": "running"})
+    original = (unreadable / "status.json").read_bytes()
+    complete = tmp_path / "complete"
+    complete.mkdir()
+    write_json(complete / "status.json", {"state": "complete", "progress": 1., "message": "Saved result ready"})
+    app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py"), default_timeout=20)
+    app.session_state["video_run"] = str(unreadable)
+    app.run()
+    assert not app.exception
+    app.radio(key="page").set_value("Saved runs").run()
+    assert not app.exception
+    assert app.button(key="inspect_" + complete.name)
+    assert any("Job status is unreadable" in element.value for element in app.markdown)
+    assert (unreadable / "status.json").read_bytes() == original
+
+
 def test_classroom_samples_and_saved_examples():
     app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py"), default_timeout=20).run()
     app.selectbox(key="demo_sample").select("Low-light street · simulated darkness").run()

@@ -22,18 +22,23 @@ def process_run(run):
         settings = Settings(**request["settings"])
         saved_scene_revision = 0
         def finish():
+            check_cancel(run)
             evidence = run / "evidence"
             if evidence.exists():
                 with zipfile.ZipFile(run / "evidence.zip", "w", zipfile.ZIP_DEFLATED) as archive:
                     for path in evidence.glob("*.png"):
+                        check_cancel(run)
                         archive.write(path, path.name)
             scene_folder = run / "scene_features"
             if scene_folder.exists():
                 with zipfile.ZipFile(run / "scene_features.zip", "w", zipfile.ZIP_DEFLATED) as archive:
                     for path in scene_folder.rglob("*"):
+                        check_cancel(run)
                         if path.is_file():
                             archive.write(path, path.relative_to(scene_folder))
-            return analyzer.summary()
+            summary = analyzer.summary()
+            check_cancel(run)
+            return summary
 
         with (run / "detections.jsonl").open("w", encoding="utf-8") as frames, (run / "events.jsonl").open("w", encoding="utf-8") as events:
             def hook(result, original, index, distance):
@@ -75,8 +80,11 @@ def process_run(run):
                            "transform_to_source_pixel_centres": result.transform_to_source.tolist()})
                 write_json(run / "report.json", {"schema_version": 1, "kind": "image", "source": Path(request["source"]).name,
                            "settings": settings.to_dict(), "ai": finish()})
+                check_cancel(run)
                 update(run, "complete", progress=1, message="AI image analysis ready.")
     except Cancelled:
+        for name in ("processed.png", "report.json"):
+            (run / name).unlink(missing_ok=True)
         update(run, "cancelled", progress=0, message="AI processing cancelled. Original upload is unchanged.")
     except Exception as exc:
         update(run, "failed", progress=0, message=f"AI processing failed: {exc}. See worker.log; run Setup-AI.ps1 if dependencies are missing.")

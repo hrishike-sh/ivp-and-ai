@@ -10,17 +10,19 @@ A local image and video processing application for the combined IVP and AI traff
 
 **Use the existing installation:** double-click [Start.cmd](Start.cmd), then open [Traffic Lab](http://127.0.0.1:8511/). The H-drive Python environment and local model already exist on this computer; no setup or download is needed to show the demo.
 
-**Show the verified result immediately:** open **Saved runs**, search `20261018-000645-35608fe8`, and choose **Open result ↗** for `india-city.mp4`. Close the result dialog and return to the workspace to use **Play result** and inspect the IVP stages. This 20-second result is already loaded. Clear the library search to see other runs.
+**Show the verified result on the original workstation:** open **Saved runs**, search `20261018-000645-35608fe8`, and choose **Open result ↗** for `india-city.mp4`. Close the result dialog and return to the workspace to use **Play result** and inspect the IVP stages. Clear the library search to see other runs. Generated runs and local footage are excluded from Git; a fresh clone needs its own upload and processing run.
 
 **Process footage yourself:** load the Indian city demo or upload a video, choose **Vehicles · local detector + IVP**, then **Track automatically & calculate speed**. No vehicle-by-vehicle selection is required. **Moving texture regions · IVP only** keeps the motion workflow entirely classical. A running job can be reopened from Saved runs, and progress resumes after reload.
 
-Current verification: **251 Python tests**, **4 JavaScript tests**, real Indian-video development checks, and browser playback/download checks. A repeated three-minute workload also completes with exact frame timing. These checks do not establish general crowded-traffic accuracy. Default speed is **px/s**; approximate km/h requires one measured road calibration and real-time footage. Full occlusion, clipped objects and very small vehicles remain difficult.
+Current verification after integrating remote fixes: **401 Python tests passed, 3 skipped**, and **6 JavaScript tests passed**. Earlier real Indian-video development checks and browser playback/download checks are recorded in the progress log; a repeated three-minute workload completes with exact frame timing. These checks do not establish general crowded-traffic accuracy. Default speed is **px/s**; approximate km/h requires one measured road calibration and real-time footage. Full occlusion, clipped objects and very small vehicles remain difficult.
 
 For a concise evidence map and review inventory, start at [the handoff index](docs/AUTOMATIC_TRACKING.md#handoff-at-a-glance). [INSTALL.md](INSTALL.md) covers another computer or missing prerequisites; [PROGRESS.md](PROGRESS.md) retains the chronological record.
 
 ## Open the app
 
 Double-click **Start.cmd**. It opens http://127.0.0.1:8511 in your browser. The server runs in the background on this computer only. Double-click **Stop.cmd** to stop the server and request cancellation of active video jobs.
+
+Overlapping Start actions wait for the current startup and reuse the same server, preserving the server PID used by Stop.cmd. If startup fails, times out or is interrupted, the launcher stops its newly created server before another Start attempt can proceed. Details remain in `temp/server.log`.
 
 The isolated `H:\CodexStorage\ivp-ai\venv` uses Python 3.11. The system Python installation is unchanged. Dependencies are pinned in `requirements.txt`; `requirements.in` is the editable dependency specification. FFmpeg and ffprobe must be on PATH for video inspection and export.
 
@@ -49,6 +51,8 @@ For optional rule review, expand **Incident review · optional** in the video pa
 
 Saved image exports are snapshots: changes to sliders do not alter an existing export. Save again to create another run. Video jobs capture the settings at the time Process entire video is clicked. Changing the preview afterwards does not change the running job.
 
+New uploads become available for processing only after the complete copy closes successfully. Failed copies are removed so a retry starts cleanly, and overlapping uploads of the same file cannot reuse a partially written source.
+
 ## Processing stages
 
 ### Classical video movement analysis
@@ -72,6 +76,10 @@ The IVP walkthrough includes original colour, grayscale, smoothing, grayscale CL
 Automatic choices are deterministic heuristics, not a promise of optimal enhancement. The FFT and derivative views are normalized for display. Connected regions, contours, lines and colour masks are visual features; they do not identify vehicles or establish traffic violations.
 
 The colour pipeline is orientation correction → optional downsize preserving aspect ratio → denoising → optional gray-world white balance → exposure scaling → optional percentile contrast stretch → gamma → optional CLAHE on Lab luminance → optional unsharp mask → saturation adjustment. Denoising choices are Gaussian, median, and bilateral. Gamma above 1 brightens, below 1 darkens. Sharpening strength 0 disables sharpening.
+
+Video previews and worker frames apply quarter-turn display rotations and horizontal/vertical reflections before processing, so mirrored camera metadata is preserved in the displayed orientation and exported pixels.
+
+Unsigned 16-bit grayscale PNGs are scaled from 0–65535 to 0–255 with rounding before RGB processing. Transparent samples use the same white background as other images.
 
 Feature extraction branches from the prepared frames. Grayscale, thresholding, edges, contours, and lines use the processed colour frame. HSV and colour masks use the original resized colour frame so enhancement cannot manufacture a signal colour.
 
@@ -98,7 +106,7 @@ Colour settings stay fixed over the video; content-dependent operations such as 
 
 Selected video feature views are PNG samples, approximately once per second, packaged in a ZIP. All frames receive colour processing and quality measurements. Frame measurements and scene-change records stream to CSV. Downloads and video playback stream from disk via a tokenised localhost file server with HTTP Range support. The web uploader streams compressed bytes to disk in 1 MB chunks. The 1 GB file limit is separate from decoded-frame memory; high-resolution images still need more RAM. The API keeps one processed-frame cache and serializes expensive interactive operations.
 
-One video worker is permitted at a time using an OS file lock. Cancellation is checked between frames and during final audio muxing. Interrupted workers are marked after a 30-second stale-status window when the OS lock is free. Restart the job from its original upload; partial runs are not presented as completed output. Closing the browser alone leaves a worker running; Stop.cmd requests cancellation.
+One video worker is permitted at a time using an OS file lock. Cancellation is checked between frames, during final audio muxing, between AI archive entries and before publishing completed results. If the muxer does not stop after termination is requested, the worker kills it and waits for it to exit before releasing the lock. Interrupted workers are marked after a 30-second stale-status window when the OS lock is free. Restart the job from its original upload; partial runs are not presented as completed output. Closing the browser alone leaves a worker running; Stop.cmd requests cancellation.
 
 ## Road candidates: limitations
 
