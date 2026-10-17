@@ -91,6 +91,9 @@ def probe_video(path):
 def load_image(path):
     try:
         with Image.open(path) as image:
+            limit = Image.MAX_IMAGE_PIXELS
+            if limit is not None and image.width * image.height > limit:
+                raise MediaError("Image exceeds the safe pixel limit. Resize it before uploading.")
             image = ImageOps.exif_transpose(image)
             if image.mode in ("I;16", "I;16L", "I;16B", "I;16N"):
                 samples = np.asarray(image, dtype=np.uint32)
@@ -108,7 +111,7 @@ def load_image(path):
             if min(rgb.shape[:2]) < 2:
                 raise MediaError("Image dimensions must be at least 2 × 2 pixels.")
             return rgb
-    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
         raise MediaError("Cannot read this image. Use a valid JPG or PNG; very large images should be resized first.") from exc
 
 
