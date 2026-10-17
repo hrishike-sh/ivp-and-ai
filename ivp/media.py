@@ -1,7 +1,10 @@
 import io
+import hashlib
 import json
 import shutil
 import subprocess
+import tempfile
+import time
 from pathlib import Path
 
 import av
@@ -11,6 +14,13 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 class MediaError(ValueError):
     pass
+
+
+def source_revision(path):
+    """Local file revision, not a content hash: detects replacement since preview."""
+    path = Path(path).resolve()
+    stat = path.stat()
+    return hashlib.sha256(f'{path}|{stat.st_size}|{stat.st_mtime_ns}'.encode()).hexdigest()
 
 
 def tool_path(name):
@@ -134,6 +144,22 @@ def png_bytes(array):
 
 def write_json(path, payload):
     path = Path(path)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-    temporary.replace(path)
+    # Each writer owns its temporary file. Windows readers/virus scanners can
+    # briefly hold the destination open, so retry the atomic replacement.
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=path.name + ".", suffix=".tmp", delete=False) as stream:
+            temporary = Path(stream.name)
+            json.dump(payload, stream, indent=2, ensure_ascii=False)
+        for attempt in range(8):
+            try:
+                temporary.replace(path)
+                return
+            except PermissionError:
+                if attempt == 7:
+                    raise
+                time.sleep(.02 * (attempt + 1))
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)

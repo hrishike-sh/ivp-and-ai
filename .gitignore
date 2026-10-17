@@ -21,5 +21,11 @@ Ultralytics/
 *.pyc
 demo/indian_riders.png
 demo/indian_night.png
+demo/indian-motion.mp4
+demo/highway-motion.mp4
+demo/traffic-motion.avi
+demo/road-motion.avi
 demo/results/**/process.json
 demo/results/**/request.json
+
+/demo/india-*.mp4

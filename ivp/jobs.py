@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,10 +58,13 @@ def new_run():
 
 
 def read_status(run):
-    try:
-        return json.loads((Path(run) / "status.json").read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {"state": "unknown", "message": "Waiting for job status."}
+    for attempt in range(3):
+        try:
+            return json.loads((Path(run) / "status.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            if attempt < 2:
+                time.sleep(.01)
+    return {"state": "unknown", "message": "Waiting for job status; retrying automatically."}
 
 
 def refreshed_status(run):
@@ -72,6 +76,14 @@ def refreshed_status(run):
         return state
     try:
         with job_lock():
+            # The worker may have finished between the first read and lock
+            # acquisition. Never replace its newer result with stale recovery.
+            state = read_status(run)
+            if state.get("state") not in ("queued", "running", "encoding"):
+                return state
+            age = (datetime.now(timezone.utc) - datetime.fromisoformat(state["updated_at"])).total_seconds()
+            if age < 30:
+                return state
             state = {**state, "state": "interrupted", "message": "Worker stopped unexpectedly. Start a new run from the original upload.", "updated_at": now()}
             write_json(Path(run) / "status.json", state)
     except RuntimeError:
@@ -79,8 +91,17 @@ def refreshed_status(run):
     return state
 
 
-def start_video(path, info, settings, selected_masks, ai=False):
+def start_video(path, info, settings, selected_masks, ai=False, motion=None):
     executable, module = sys.executable, "ivp.worker"
+    if motion is not None:
+        if ai:
+            raise ValueError('Choose IVP motion or AI analysis separately.')
+        module = 'ivp.motion_worker'
+        if motion.get('tracking_mode')=='vehicles':
+            from traffic_ai.runtime import python_path, runtime_root
+            executable=str(python_path())
+            if not Path(executable).is_file() or not (runtime_root()/'models'/'yolo11s.pt').is_file():
+                raise RuntimeError('Local vehicle detection is not installed. Run Setup-AI.ps1 or choose IVP-only moving objects.')
     if ai:
         from traffic_ai.runtime import python_path
 
@@ -98,7 +119,8 @@ def start_video(path, info, settings, selected_masks, ai=False):
                 write_json(status_path, {**state, "state": "interrupted", "message": "Previous worker stopped unexpectedly.", "updated_at": now()})
         run = new_run()
         write_json(run / "request.json", {"source": str(Path(path).resolve()), "info": info,
-                   "settings": settings.to_dict(), "selected_masks": selected_masks, "created_at": now(), "ai": ai})
+                   "settings": settings.to_dict(), "selected_masks": selected_masks, "created_at": now(), "ai": ai,
+                   'motion': motion})
         write_json(run / "status.json", {"state": "queued", "progress": 0, "updated_at": now(), "message": "Starting video worker."})
         with (run / "worker.log").open("wb") as log:
             process = subprocess.Popen([executable, "-m", module, str(run)], cwd=ROOT,

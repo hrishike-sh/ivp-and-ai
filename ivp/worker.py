@@ -11,7 +11,7 @@ import av
 import cv2
 
 from .jobs import job_lock, now
-from .media import hidden_process_options, png_bytes, tool_path, video_frames, write_json
+from .media import hidden_process_options, png_bytes, tool_path, video_frames, write_json, source_revision
 from .pipeline import Settings, process_frame, scene_distance, scene_signature
 
 
@@ -28,7 +28,7 @@ def update(run, state, **kwargs):
     write_json(run / "status.json", {"state": state, "updated_at": now(), **kwargs})
 
 
-def process_video(run, frame_hook=None, final_hook=None):
+def process_video(run, frame_hook=None, final_hook=None, final_key='ai'):
     request = json.loads((run / "request.json").read_text(encoding="utf-8"))
     info = request["info"]
     settings = Settings(**request["settings"])
@@ -49,6 +49,8 @@ def process_video(run, frame_hook=None, final_hook=None):
     try:
         tool_path("ffmpeg")
         check_cancel(run)
+        if info.get('source_revision') and info['source_revision'] != source_revision(source):
+            raise ValueError('Source video changed after preview. Reopen it and recalibrate before retrying.')
         update(run, "running", progress=0, message="Processing frames.")
         with (run / "measurements.csv").open("w", newline="", encoding="utf-8") as metrics_file, \
              (run / "scene_changes.csv").open("w", newline="", encoding="utf-8") as scene_file, \
@@ -148,7 +150,8 @@ def process_video(run, frame_hook=None, final_hook=None):
                   "audio_policy": "First audio track retained as AAC with original relative timestamps; negative pre-roll trimmed.",
                   "limitations": ["Quality and scene changes are heuristics.", "Road and colour masks do not classify traffic rules."]}
         if final_hook:
-            report["ai"] = final_hook()
+            report[final_key] = final_hook()
+        check_cancel(run)
         write_json(run / "report.json", report)
         (run / "video.partial.mp4").unlink(missing_ok=True)
         update(run, "complete", progress=1, frames=frame_count, message="Video is ready.", duration=total_duration)
@@ -156,7 +159,7 @@ def process_video(run, frame_hook=None, final_hook=None):
         if encoder is not None:
             encoder.close()
             encoder = None
-        for name in ("video.partial.mp4", "processed.mp4"):
+        for name in ("video.partial.mp4", "processed.mp4", "report.json", "motion-evidence.zip"):
             (run / name).unlink(missing_ok=True)
         update(run, "cancelled", progress=0, frames=frame_count, message="Cancelled. Original upload is unchanged.")
     except Exception as exc:

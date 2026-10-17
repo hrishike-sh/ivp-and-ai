@@ -11,19 +11,28 @@ from ivp.jobs import ROOT, cancel_job, history, new_run, now, refreshed_status, 
 from ivp.media import MediaError, load_image, png_bytes, preview_frame, probe_video, write_json
 from ivp.pipeline import PRESETS, Settings, histogram, process_frame
 from classroom import SAMPLES, render_demo
+from ivp.workspace import comparison_wipe, run_details, source_name
 
 
 st.set_page_config(page_title="Traffic Lab · IVP + AI", page_icon="◈", layout="wide")
 st.markdown("""
 <style>
-.block-container {padding-top: 4rem; max-width: 1540px;}
-h1 {letter-spacing: -.045em; font-weight: 750 !important;}
-[data-testid="stMetric"] {background: #141f32; padding: 14px 18px; border: 1px solid #26354c; border-radius: 10px;}
-[data-testid="stMetricLabel"] {color: #a9bbd0;}
-.eyebrow {color: #38bdf8; font-size: 13px; letter-spacing: .15em; font-weight: 700; margin: 0;}
-.step {color: #a9bbd0; font-size: 15px; margin-bottom: 1rem;}
+.block-container {padding-top: 2.5rem; max-width: 1440px;}
+h1 {letter-spacing: -.04em; font-weight: 650 !important;}
+h2, h3 {letter-spacing: -.02em;}
+[data-testid="stMetric"] {padding: 12px 16px; border: 1px solid #334155; border-radius: 8px;}
+[data-testid="stMetricLabel"] {color: #b9c3d1;}
+.eyebrow {color: #c5a572; font-size: 11px; letter-spacing: .16em; font-weight: 600; margin: 0;}
+.step {color: #b9c3d1; font-size: 16px; margin-bottom: 1.5rem;}
+[data-testid="stSidebar"] {border-right: 1px solid #293241;}
+[data-testid="stImage"] img {border-radius: 6px;}
 </style>
 """, unsafe_allow_html=True)
+
+# Keep workspace selections when their widgets are hidden by page navigation.
+for state_key in list(st.session_state):
+    if state_key.startswith(("cfg_", "time_")) or state_key in ("preset", "demo_sample", "workspace_view"):
+        st.session_state[state_key] = st.session_state[state_key]
 
 
 @st.cache_resource
@@ -41,6 +50,21 @@ def cached_preview(path, seconds):
     return preview_frame(path, probe_video(path), seconds)
 
 
+@st.cache_data(max_entries=2, show_spinner=False)
+def cached_processing(rgb, settings, stamp):
+    return process_frame(rgb, settings, stamp)
+
+
+def reset_processing():
+    st.session_state["preset"] = "Original"
+    apply_preset()
+
+
+def open_result(run):
+    st.session_state["video_run"] = str(run)
+    st.session_state["page"] = "Results"
+
+
 def apply_preset():
     for name, value in PRESETS[st.session_state["preset"]].to_dict().items():
         st.session_state["cfg_" + name] = value
@@ -53,9 +77,10 @@ def control_panel():
     with st.sidebar:
         st.markdown("### Processing")
         st.selectbox("Preset", list(PRESETS), key="preset", on_change=apply_preset)
+        st.button("Reset adjustments", on_click=reset_processing, width="stretch")
         st.caption("Presets fill the controls below. Your adjustments apply to the preview and export.")
         st.selectbox("Maximum width", [0, 640, 960, 1280, 1920], key="cfg_max_width", format_func=lambda n: "Original size" if not n else f"{n} px")
-        with st.expander("Noise reduction", expanded=True):
+        with st.expander("Noise reduction"):
             st.selectbox("Filter", ["Off", "Gaussian", "Median", "Bilateral"], key="cfg_denoise")
             st.select_slider("Filter size", [3, 5, 7, 9], key="cfg_kernel")
         with st.expander("Light and detail", expanded=True):
@@ -141,7 +166,9 @@ def job_panel():
     run = Path(run_value)
     status = refreshed_status(run)
     state = status.get("state")
-    st.markdown("#### Processing job")
+    details = run_details(run)
+    st.markdown("#### " + source_name(details))
+    st.caption(f"Saved run {run.name} · {state}")
     st.progress(float(status.get("progress", 0)), text=status.get("message", state))
     if state in ("queued", "running", "encoding"):
         st.caption(f"{status.get('frames', 0):,} frames · {status.get('timestamp', 0):.1f}s processed · {status.get('fps', 0):.1f} frames/sec")
@@ -176,7 +203,21 @@ def job_panel():
         if report_path.exists():
             report = json.loads(report_path.read_text(encoding="utf-8"))
             if report.get("ai"):
-                st.write("Events by rule", report["ai"]["events_by_rule"])
+                events = report["ai"].get("events_by_rule", {})
+                st.metric("Reported events", sum(events.values()))
+                if events:
+                    st.dataframe([{"Rule": k.replace("_", " "), "Events": v} for k, v in events.items()], hide_index=True)
+                else:
+                    st.info("No supported violation events were reported. This does not establish that the scene is violation-free; check assessment coverage below.")
+                coverage = report["ai"].get("assessment_counts", {})
+                if coverage:
+                    with st.expander("Which rules could be assessed?", expanded=True):
+                        rows = []
+                        for key, count in coverage.items():
+                            rule, _, verdict = key.partition("/")
+                            rows.append({"Rule": rule.replace("_", " "), "Assessment": verdict.replace("_", " "), "Frame assessments": count})
+                        st.dataframe(rows, hide_index=True, width="stretch")
+                        st.caption("Counts are frame assessments, not unique vehicles or events. Cannot assess means evidence or scene context was insufficient.")
                 with st.expander("AI assessment coverage and limitations"):
                     st.json(report["ai"])
                 scene_root = run / "scene_features"
@@ -208,16 +249,21 @@ def job_panel():
 
 settings = control_panel()
 st.markdown('<p class="eyebrow">TRAFFIC LAB / IMAGE & VIDEO PROCESSING</p>', unsafe_allow_html=True)
-st.title("Traffic Lab · IVP + AI")
-st.markdown('<p class="step">Upload → Preview → Adjust → Compare → Export</p>', unsafe_allow_html=True)
-demo_tab, workspace_tab, history_tab = st.tabs(["Classroom demo", "Workspace", "Saved runs"])
+st.title("A closer look at the road.")
+st.markdown('<p class="step">Enhance footage, examine evidence, and keep a record of what you find. All processing stays local.</p>', unsafe_allow_html=True)
+page = st.radio("Navigation", ["Workspace", "Results", "Saved runs", "Classroom demo"], horizontal=True, key="page", label_visibility="collapsed")
+st.divider()
 
-with workspace_tab:
+if page == "Workspace":
+    if st.session_state.get("video_run"):
+        st.button("Open latest analysis result", on_click=open_result, args=(st.session_state["video_run"],))
+    st.subheader("Start with your footage")
     available_samples = [name for name, filename in SAMPLES.items() if filename is None or (ROOT / "demo" / filename).is_file()]
     sample = st.selectbox("Bundled demo sample", available_samples, key="demo_sample")
     sample_path = ROOT / "demo" / SAMPLES[sample] if SAMPLES[sample] else None
     upload = st.file_uploader("Traffic image or video", type=["jpg", "jpeg", "png", "mp4", "mov", "avi"], help="Up to 1 GB. Originals are saved locally and left unchanged.")
-    if upload is None and sample_path is None:
+    previous_upload = (st.session_state.get("upload_path") if not str(st.session_state.get("upload_id", "demo_")).startswith("demo_") else None)
+    if upload is None and sample_path is None and previous_upload is None:
         st.info("Drop a traffic image or video above to begin. Start with Original, then adjust the processing controls.")
         left, middle, right = st.columns(3)
         with left:
@@ -231,13 +277,16 @@ with workspace_tab:
             st.write("Save processed media, selected masks and reproducible settings.")
     else:
         try:
-            upload_id = getattr(upload, "file_id", upload.name) if upload is not None else "demo_" + sample_path.name
+            upload_id = (getattr(upload, "file_id", upload.name) if upload is not None else
+                         "demo_" + sample_path.name if sample_path is not None else st.session_state["upload_id"])
             if st.session_state.get("upload_id") != upload_id:
                 path = save_upload(upload) if upload is not None else sample_path
                 st.session_state["upload_path"] = str(path)
                 st.session_state["upload_id"] = upload_id
                 st.session_state.pop("image_export", None)
             path = Path(st.session_state["upload_path"])
+            if upload is None and sample_path is None:
+                st.caption(f"Continuing with your saved upload: {path.name}. Upload another file to replace it.")
             is_video = path.suffix.lower() in (".mp4", ".mov", ".avi")
             stamp = 0.0
             if is_video:
@@ -249,9 +298,10 @@ with workspace_tab:
             else:
                 rgb = cached_image(str(path))
                 st.caption(f"{path.name} · {rgb.shape[1]} × {rgb.shape[0]} · RGB preview · {path.stat().st_size / 1048576:.2f} MB")
-            result = process_frame(rgb, settings, stamp)
-            compare, features, stages, measurements, ai_tab = st.tabs(["Before / after", "Feature views", "Processing stages", "Quality + histograms", "AI analysis"])
-            with ai_tab:
+            result = cached_processing(rgb, settings, stamp)
+            view = st.radio("Inspect", ["Before / after", "AI analysis", "Feature views", "Processing stages", "Quality + histograms"], horizontal=True, key="workspace_view")
+            if view == "AI analysis":
+                st.subheader("Detect objects or describe the scene")
                 st.write("Analyse road users, riders, and traffic-rule evidence using local models. The current IVP settings are applied before detection.")
                 st.warning("Experimental implementation: model and rider-association accuracy are not yet validated. Automatic legal scene association is still being developed. Unresolved rules return cannot assess.")
                 st.caption("Green boxes mark reported violation events. Detection alone is not a violation. Video motion checks do not run on single images. First use downloads model weights.")
@@ -262,21 +312,43 @@ with workspace_tab:
                         st.session_state["video_run"] = str(run)
                     except (RuntimeError, OSError) as exc:
                         st.error(str(exc))
-            with compare:
-                before_col, after_col = st.columns(2)
-                before_col.image(rgb, caption="Original · orientation corrected", width="stretch")
-                after_col.image(result.color_rgb, caption="Processed colour frame", width="stretch")
+                st.divider()
+                st.subheader("Local vision scene review")
+                st.caption("Qwen3-VL reviews this original image or selected video frame locally. Its descriptions are unverified observations and do not create green violation boxes. Runtime and model files are stored on H:.")
+                review_key = f"vision_review_{upload_id}_{stamp:.6f}"
+                if st.button("Review this frame with local vision"):
+                    try:
+                        from ivp.jobs import job_lock
+                        from traffic_ai.local_vision import review_frame
+                        with job_lock(), st.spinner("Reviewing the frame locally; first loading can take longer..."):
+                            st.session_state[review_key] = review_frame(rgb, stamp)
+                    except (RuntimeError, OSError, ValueError) as exc:
+                        st.error(f"Local vision review failed: {exc}")
+                if review_key in st.session_state:
+                    review = st.session_state[review_key]
+                    st.write(review["observation"]["summary"])
+                    st.caption(f"{review['model']} · {review['duration_seconds']:.1f}s · AI-generated observations require checking against the image.")
+                    st.download_button("Download scene review JSON", json.dumps(review, indent=2), "scene-review.json", "application/json")
+            if view == "Before / after":
+                layout = st.radio("Comparison layout", ["Side by side", "Wipe comparison"], horizontal=True)
+                if layout == "Wipe comparison":
+                    split = st.slider("Original ← comparison divider → Processed", 0, 100, 50, format="%d%%")
+                    st.image(comparison_wipe(result.stages["Prepared"], result.color_rgb, split), caption="Left: original · Right: processed · Matching scale", width="stretch")
+                else:
+                    before_col, after_col = st.columns(2)
+                    before_col.image(result.stages["Prepared"], caption="Original · matched comparison size", width="stretch")
+                    after_col.image(result.color_rgb, caption="Processed colour frame", width="stretch")
                 st.caption("Colour enhancement is separate from feature masks. The Original preset preserves decoded RGB pixels when no resize is selected.")
-            with features:
+            if view == "Feature views":
                 choice = st.selectbox("Feature view", list(result.features), index=list(result.features).index("Road candidates"))
                 st.image(result.features[choice], caption=choice, width="stretch", clamp=True)
                 st.warning("Road overlays are geometric candidates, not detected crossings, stop lines or violations. Colour masks do not identify traffic signals.")
                 st.caption(f"{len(result.candidates['stripe_boxes'])} stripe candidates · {len(result.candidates['horizontal_segments'])} near-horizontal segments. Amber = stripe shapes; blue = line segments.")
-            with stages:
+            if view == "Processing stages":
                 stage_cols = st.columns(2)
                 for index, (name, array) in enumerate(result.stages.items()):
                     stage_cols[index % 2].image(array, caption=name, width="stretch")
-            with measurements:
+            if view == "Quality + histograms":
                 before = result.measurements["original"]
                 after = result.measurements["processed"]
                 cols = st.columns(3)
@@ -292,6 +364,7 @@ with workspace_tab:
                     st.json({**result.measurements, "transform_to_source_pixel_centres": result.transform_to_source.tolist()})
             st.divider()
             st.subheader("Export")
+            st.download_button("Download processing settings", json.dumps(settings.to_dict(), indent=2), "processing-settings.json", "application/json")
             selected = st.multiselect("Include feature masks", list(result.features), default=["Edges", "Colour mask", "White marking mask"], help="Image exports include these PNG views. Video exports sample them about once per second to keep output manageable.")
             if st.button("Save this frame" if is_video else "Save processed image", type="primary"):
                 st.session_state["image_export"] = str(export_image(path, result, settings, selected, stamp, "video_frame" if is_video else "image"))
@@ -310,33 +383,47 @@ with workspace_tab:
             st.error(str(exc))
     job_panel()
 
-with history_tab:
+if page == "Results":
+    st.subheader("Analysis & exports")
+    if not st.session_state.get("video_run"):
+        st.info("Run an analysis in Workspace, or open a previous result from Saved runs.")
+    job_panel()
+
+if page == "Saved runs":
+    st.subheader("Your processing history")
+    search_col, filter_col = st.columns([3, 1])
+    search = search_col.text_input("Find a run", placeholder="Search by filename or run ID").casefold()
+    state_filter = filter_col.selectbox("Status", ["All", "complete", "running", "queued", "encoding", "cancelled", "failed", "interrupted"])
     if st.button("Refresh saved runs"):
         st.rerun()
     runs = history()
     if not runs:
         st.caption("Saved images and video jobs will appear here.")
+    matches = 0
     for status_path in runs:
         run = status_path.parent
         status = refreshed_status(run)
-        with st.expander(f"{run.name} · {status.get('state', 'unknown')}"):
+        details = run_details(run)
+        name = source_name(details)
+        if search not in f"{name} {run.name}".casefold() or (state_filter != "All" and status.get("state") != state_filter):
+            continue
+        matches += 1
+        with st.expander(f"{name} · {status.get('state', 'unknown')} · {run.name}"):
             st.write(status.get("message", ""))
             if status.get("state") == "complete":
-                if st.button("Inspect saved result", key="inspect_" + run.name):
-                    st.session_state["video_run"] = str(run)
-                    st.info("Open Workspace to inspect this result below the input controls.")
+                st.button("Inspect saved result", key="inspect_" + run.name, on_click=open_result, args=(run,))
                 download_links(run)
                 if (run / "report.json").exists():
                     st.json(json.loads((run / "report.json").read_text(encoding="utf-8")), expanded=False)
             elif status.get("state") in ("queued", "running", "encoding"):
-                if st.button("Show video job", key="show_" + run.name):
-                    st.session_state["video_run"] = str(run)
-                    st.rerun()
+                st.button("Show video job", key="show_" + run.name, on_click=open_result, args=(run,))
                 if st.button("Cancel job", key="cancel_" + run.name):
                     cancel_job(run)
                     st.rerun()
             else:
                 st.caption("Partial results are not offered as completed exports. Originals remain available in uploads.")
+    if runs and not matches:
+        st.info("No saved runs match these filters.")
 
-with demo_tab:
+if page == "Classroom demo":
     render_demo(file_server(), download_links)

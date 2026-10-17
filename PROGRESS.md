@@ -1,5 +1,79 @@
 # Project progress
 
+## 18 October 2026 — optional incident review
+
+Added reviewable line/zone crossing, missed-stop and speeding candidates on automatic vehicle tracks. The UI/API take explicit geometry, conditions/timelines, speed threshold, calibration and timing confirmations. Neutral observations and withheld assessments remain separate from candidates. Unknown conditions, observation gaps and ambiguous tracking suppress conclusions. Evidence exports include thumbnails, JSONL/CSV, settings and coordinate mappings, with bounded in-memory state and image/index limits. Existing workflows remain opt-in and the original geometry helpers are preserved.
+
+Real application inference ran on the separately generated thirteen-scenario synthetic fixture pack, with evaluation truth read only after inference. The first evaluation retained a false speeding candidate on exact-threshold footage. A conservative max(2 km/h, 5%) measurement guard fixes that boundary without suppressing the 36 km/h positive. Final acceptance: 13/13 scenario checks, comprising twelve complete timed exports and one rejected invalid calibration. A browser-created extra run verifies explicit restricted-zone and line candidates, twelve-second playback and matching downloaded CSV/ZIP files. No vehicle was manually selected.
+
+Validation: final current-code suite passes 299 Python tests, including the zone-transition guard; six JavaScript tests and syntax check pass. Evidence: `runs/incident-final-checkpoint-20261018.json`, the earlier scoped `runs/incident-acceptance-20261018.json` and linked fixture evaluations. Constant-condition video checks and transition regressions are distinct. Detailed setup and limits: `docs/AUTOMATIC_TRACKING.md`. The completed short-stop fixture remains withheld rather than positively confirmed; temporal speed estimates lag abrupt stops. The max(2 km/h, 5%) margin is a conservative review policy guard, not a validated measurement-accuracy bound or legal tolerance. Single synthetic-car tests do not establish real Indian traffic incident accuracy or real-world speed accuracy. No installs, fixture edits, commits or publication.
+
+## Sustained workload and Saved runs progress
+
+October 18. A three-minute derivative of the Indian city clip completed in 372.5 s: 1,800 frames, exact output timestamps, 600 activity-chart bins covering all frames and ending at 180 s. The input repeats the same scene nine times at 10 fps and is explicitly a workload test, not independent accuracy evidence. UI downloads match the saved MP4 and ZIP; the ZIP passes CRC checks. Full browser playback reaches 180 seconds without media or console errors. Run: `runs/20261018-004957-746f11b6`.
+
+Opening a running motion entry from Saved runs exposed a real JavaScript error because request settings were treated as completed measurements. Rendering now waits for completion, while active entries open status and restore polling. Browser acceptance opened at 972 frames, restored 1,049 after reload, and later showed 1,360 with the prior demo still usable. All 4 JavaScript tests pass; backend code is unchanged from the 251-test full suite.
+
+Observed worker RSS peaked at 1.77 GB in 98 samples starting at frame 864, with about 5.5 MB median growth over sampled later loops. Initial samples mistakenly followed the Windows launcher; they are explicitly separated from the corrected child-worker measurements. Startup peak and indefinitely long recordings are not covered. No installs, model downloads or live-server restart were required.
+
+## Consolidated checkpoint: 251 tests and real worker-stop recovery
+
+October 18. The complete current Python suite passes **251 tests** (36.18 s). An isolated test starts a real encoding worker, confirms it holds the OS worker lock, terminates only that owned child, then verifies interrupted-status recovery and a successful new worker run. The recovery grace clock advances 40 s inside the test; termination, lock release, HTTP result checks and retry encoding are real. Diagnostics are preserved, incomplete output has no preview/download links, and the retry's served MP4 matches disk bytes, decodes with original timestamps and retains audio. The source is unchanged. An initial harness expectation that the buffered encoder had already created a partial MP4 was corrected; the worker required no additional fix.
+
+The duplicate setup-directory line was removed. Ollama's fixed H-drive model root intentionally differs from its configurable Python environment and is documented consistently with the start/stop code. No installers were run. The live demo remained connected without a restart during this check. Exact source hashes, retained experiment paths and scope: `runs/worker-termination-validation-20261018.json`.
+
+## Upload retry and launcher follow-up
+
+October 18. An isolated HTTP test reproduced leaked upload copies after interrupted transfers and corrupt MP4/MOV/AVI rejections. Only newly created rejected copies are now removed; accepted uploads and originals remain intact. The same test server then accepted a valid video, previewed/exported a PNG, and completed a full export with matching timestamps and retained audio. All **28 affected server, atomic-status and video tests pass**. The earlier 249-test full-suite result predates this cleanup change; it is not claimed as a new full run.
+
+Fresh AI setup now defaults to an isolated H-drive runtime and places downloaded Python builds there, while respecting existing saved configuration. Ollama setup checks the current H-drive Python path before downloading, replacing its obsolete project-local `.venv` lookup. Four PowerShell scripts parse successfully, and missing-runtime checks exit before installation with actionable guidance. No clean install or model download was performed. INSTALL.md now describes the current IVP interface and explicitly explains the separate tracking-checkpoint download. Evidence: `runs/upload-retry-validation-20261018.json`.
+
+## Latest checkpoint: automatic tracking through partial occlusion
+
+October 18. Default vehicle tracking now uses robust recent observed-box geometry as a conservative fallback after partial occlusion corrupts the normal prediction. It requires repeated real detections, sufficient recent history, unambiguous competition and interior, ungrouped boxes. Speed history resets after recovery; no coordinates or speed are invented for hidden vehicles. All vehicle selection remains automatic.
+
+The close-passing Indian rickshaw sample improves from 4/5 checked observations with one ID change to **4/5 with no checked ID changes** (`runs/20261018-000520-7cbdea51`). The clipped foreground miss remains documented. City retains 12/12 (`000645-35608fe8`); the earlier Delhi 16/16 and intersection 6/7 results remain small development checks, not general accuracy claims. Four fixed-rate association replays have no changed frames after switching the recovery clock to actual timestamps.
+
+A new variable-rate city derivative retains 12/12 checks, 401 frames and exact source timestamps (`runs/20261018-001932-9d5ffbc5`). Source metadata says 19.9 s, while decoded footage spans 20 s: the export and corrected activity chart both use 20 s. The derivative is a timing regression, not independent traffic footage. All real sample speeds remain px/s; measured road calibration and real-time footage are needed for approximate km/h.
+
+Verification: **249 Python tests passed**. The existing three JavaScript tests also passed after the recovery UI changes. The original `traffic_ai/geometry.py` was restored byte-for-byte after an accidental overwrite during development; the new helper is isolated in `proposal_geometry.py`, the six existing consumers import successfully, and the full suite passes. No installs, model downloads, schedules, commits or publication. See `docs/AUTOMATIC_TRACKING.md` for evidence and retained failures.
+
+Browser acceptance at 19:00 UTC October 17 (00:30 IST October 18) verified the newest VFR export reaches 20 s, its 80 chart bins end at 20 s, and UI-downloaded CSV/ZIP match saved files. A deterministic interrupted-status race reproduced four failures before the fix and now passes: status recovery rereads the latest result under the worker lock before changing it. Full suite: 249 passed. The idle server was restarted under the lock to apply the fix, and the browser reconnected. Evidence: the VFR run's `browser-validation.json` and `runs/status-race-validation-20261018.json`.
+
+## Earlier checkpoint: automatic vehicles, short-gap recovery and speed
+
+October 17 late-night continuation. Whole-vehicle tracking requires no manual vehicle selection. The current local detector + IVP mode retains 12/12 checked city observations, improves crowded Delhi to **16/16**, and retains 6/7 street-intersection observations, with no ID changes among those checks. These are small development checks. It cannot guarantee arbitrary crowded-traffic accuracy. Short gaps recover only through two consecutive observed weak boxes with unambiguous geometric support; missing frames receive no invented positions. Recovery always resets speed history and crossing state.
+
+Final complete exports: city `runs/20261017-233504-6d570810` (600 frames), Delhi `runs/20261017-233711-e6defc9c` (335), street intersection `runs/20261017-233814-3acd46b1` (391), and 5 fps derivative `runs/20261017-233919-e5c8480a` (100). All preserve source timestamps exactly and reopen successfully. The derivative retains 12/12 checked observations and 894 accepted px/s samples over the original 20 seconds; it is a cadence regression, not independent footage. Delhi's six weak-recovery rows preserve detector confidence and publish no speed on the recovery frame.
+
+Cadence-aware observation windows fix low-frame-rate speed collection. Abrupt-position checks reset speed history without changing IDs; synthetic acceleration, turns and small box noise pass at 5, 10 and 30 fps. Replay baselines were regenerated to avoid conflating older timing-policy changes with speed-guard effects. Current tests: **230 Python and 3 JavaScript**, plus JS syntax. One paired profiled optimization reduced city processing from 104.27 to 79.86 seconds with identical core measurement CSVs and images. Browser refresh resumes an active job; frame export no longer replaces video progress.
+
+Standalone IVP is foreground/texture analysis. Its city stage demo had **0/12 whole-vehicle box matches**: region IDs and crossing totals must not be presented as vehicle counts. The UI explains this. Physical km/h requires measured road dimensions and real-time footage; real Indian-video km/h accuracy remains unverified.
+
+The app is running at localhost:8511. After workers finished, its server was restarted to apply the HTTP request fix: 40 live early rejections returned expected JSON errors without socket resets. The saved city demo restored, played to completion, and browser CSV/ZIP downloads matched saved files byte for byte. No installs, model downloads, schedules, commits or publication. Detailed evidence and earlier checkpoints: `docs/AUTOMATIC_TRACKING.md`.
+
+Earlier entries below are historical.
+
+## 17 October 2026 — substantial standalone video IVP
+
+Added a background motion worker: MOG2, shadow exclusion, morphology, connected regions, velocity-assisted track association, directional line crossings, Lucas–Kanade camera-motion rejection, activity timeline and duration heatmap. Produces a four-panel timed H.264 video with preserved source audio, intermediate masks/background, CSV trajectories/events and evidence ZIP. Uses the existing one-job lock, progress/cancel and bounded frame pipeline. The UI now leads with movement analysis; marking survey is a collapsed secondary tool. Startup API requests are serialized to prevent preview/sample collisions.
+
+Full suite: 152 passed. Actual 15-second highway browser run completed and decoded successfully; crowded Indian sample exposed merge/fragment failure modes, handled conservatively rather than labelled as vehicles. No AI weights or dependencies installed. Sources, evidence and limits: `docs/MOTION_VALIDATION.md`. No vehicle-count accuracy or all-Indian-traffic success claim is made.
+
+## 17 October 2026 — standalone IVP marking survey
+
+Added a selected-road-region workflow that produces candidate coverage, connected-fragment geometry, orientation, source centres and threshold-sensitivity evidence without AI. Uses original prepared pixels independent of enhancements. API saves annotated image, CSV, JSON and a six-image evidence ZIP as a separate run. UI includes selection, measurement summary, limitations, fragment table, downloads and saved-run support. Results invalidate on source/frame/selection changes.
+
+Known-shape tests cover exact coverage, white/yellow segmentation, crop boundaries, coordinate mapping, empty/flat selections, sensitivity, invalid input and exported files. The real crossing sample exposed strong threshold sensitivity; the application reports that explicitly rather than claiming an accurate wear measurement. Evidence is `temp/survey-crossing-validation.json` and `temp/survey-crossing-overlay.png`. No new dependencies or AI models installed.
+
+Final focused verification: 21 tests passed (survey, HTTP API and automatic stages), JavaScript syntax check passed. Browser drag-selection → survey → saved evidence completed on the real crossing sample, with two fragments and an explicitly flagged threshold-sensitive mask. Browser error log was empty. Screenshot: `temp/ivp-survey-ui.png`. Added an explicit tests package to avoid a third-party namespace collision in the H-drive runtime. An earlier repeated HTTP test encountered a Windows socket abort; the final focused run passed without retries inside the tests.
+
+## 14 October 2026 — IVP-first laboratory
+
+Default UI is now automatic classical IVP with 22 separately inspectable stages. Manual filters are hidden behind an explicit mode; AI has a separate workspace and does not run on workspace selection. Added grayscale preparation, Sobel derivatives, Canny, parallel thresholds, morphology, connected regions, contours, Hough lines, colour isolation and FFT explanations with actual parent relationships. Each image/frame export includes the complete stage ZIP and processing metadata. Whole-video export remains colour video plus selected sampled masks.
+
+Automatic decisions use deterministic image statistics, with one first-frame profile reused throughout videos. No new models or dependencies were installed. Full suite passed 127 tests before the final export-metadata refinement; the final focused suite passed all 9 tests, including a new first-frame-only regression and ZIP metadata check. Five local traffic examples produced all stages; video preview/export reused settings. Evidence: `temp/ivp-automatic-validation.json`. These checks verify pipeline behavior, not general road-feature accuracy or optimal enhancement.
+
 ## Current scope
 
 17 September dark-sign localisation fix: widened only the sign-specific upper red hue interval from >168 to >160, preserving saturation/value/shape thresholds. Actual Barcelona sign is now located at [242,475,630,840]; all 8 focused sign tests pass. Actual GTSRB inference retains cannot_assess for this unsupported sign and the negative bus photo. The recovered crop still fails the Vietnamese turn detector (wrong speed-limit class), so that adapter remains diagnostic-only. See docs/TURN_SIGN_VALIDATION.md and localisation_fix.json/localised_turn_results.json. No turn-recognition success is claimed.
@@ -114,3 +188,78 @@ Evaluated IISc AIM's pinned UVH-26 YOLO11-S checkpoint against the current COCO 
 EventCollector now keys turn episodes by the originating entry timestamp as well as track and rule. A brief gap in resolved turn observations no longer produces another event for the same retained entry. A distinct entry is not merged into an earlier manoeuvre merely because it occurs within the generic event gap. The entry cache expires with the eight-second turn-context window and is cleared at scene changes. Current positive decisions remain available for display even when their already-reported event is suppressed.
 
 Verification: 14 event/context/worker tests pass, including three new regressions covering intermittent observations of one entry, distinct entries within the generic gap, and expiration/scene reset. Real calibrated turn-video validation and automatic calibration remain outstanding.
+
+### 7 October - local vision runtime on H: (installation in progress)
+
+User authorised local Ollama/LLM capability with every installed runtime, model and cache on H:. Downloaded Ollama v0.40.0 portable Windows archive to H:/CodexStorage/ivp-ai/ollama/downloads and verified SHA256 3623e256762ca89bd6fa99b0cc4106401919ce9df926411673e632e3ea287bb5 before extraction. Server is running at 127.0.0.1:11435; server log confirms CUDA RTX 4050 detection and cloud disabled. Child-process environment redirects USERPROFILE, LOCALAPPDATA, APPDATA, TEMP/TMP, OLLAMA_MODELS and CUDA_CACHE_PATH under the H: root. No C:/Users/rushi/.ollama directory was created.
+
+Added Setup-Ollama.ps1, Stop-Ollama.ps1, scoped runtime helper, validated JSON scene-review client and a Workspace > AI analysis review button for the original image/selected video frame. Reviews are unverified observations, do not create events/calibrations, and are stored on H:. Keep-alive 0 unloads the model after a request. Installation guide includes usage and stop instructions. Full suite: 102 tests pass.
+
+Model pull qwen3-vl:4b is STILL RUNNING; setup tool session 24379 owns the pull. At the last check its main blob had downloaded about 537 MB of 3,295,612,832 bytes. Do not restart or claim the model is usable before checking that live session or /api/tags. After completion, run H:/CodexStorage/ivp-ai/ollama/evaluate_scene_review.py with the project .venv Python; this evaluates the known real no-left-turn photograph and Indian rider image and writes H:/CodexStorage/ivp-ai/ollama/evaluation.json. Real inference and UI review verification remain pending. Changes are not committed or pushed yet.
+
+### 8 October - local vision installation and real inference verified
+
+Ollama v0.40.0 and qwen3-vl:4b are now installed on H:. The pull completed after retrying a transient DNS failure without redownloading the completed main blob. Model digest: 1343d82ebee38e26a4dd6b0180b915eb91550184e67c505dea97509571c8f683 (Q4_K_M, 4.4B; 3,295,636,135 bytes reported by Ollama). Server, runtime, profile, caches, temporary files, downloads and review outputs are under H:/CodexStorage/ivp-ai/ollama. No C:/Users/rushi/.ollama folder was created. Server listens only on 127.0.0.1:11435 with cloud disabled.
+
+Actual evaluation: a focused no-left-sign question succeeded in 6.64 seconds. A longer structured description incorrectly called the same sign no-U-turn, and constrained JSON / bounding-box attempts exhausted their token limits (bounding-box attempt: 2300 tokens, 51.1 seconds, no final answer). The current model generates reasoning even with think=false. These failures are evidence against replacing YOLO, not grounds for lowering verification requirements.
+
+Simplified the app to a short plain-language scene review with a structured provenance envelope. Final two-case run succeeded: real no-left-turn photo correctly described in 11.13 seconds; Indian riders described in 9.17 seconds. Results: H:/CodexStorage/ivp-ai/ollama/evaluation.json, sign_plain_evaluation.json and grounding_evaluation.json. The review uses the original image, limits resolution/context, saves its model digest, image hash and timestamp, and unloads after completion. It does not provide calibrated geometry or create rule events. The app's real Streamlit review button was exercised successfully on the Indian rider sample.
+
+Validation: full suite passed 102 tests before the final client changes; the final local-vision/app subset passed 7 tests, including request/provenance checks and H:-only child environment checks. Existing detector/track/rule pipeline remains in place. User authorised replacement of YOLO if local vision proves suitable; this model has not met that condition. Automatic nine-rule scene interpretation remains unfinished.
+
+### 8 October - workspace usability improvements
+
+Workspace is now the landing page, with separate Results, Saved runs and Classroom demo navigation. Only the selected inspection view is rendered; processed frames use a bounded two-entry cache so navigation and comparison controls do not repeat the IVP pipeline. Processing settings and sample selections persist across page changes; uploaded footage can be resumed from its saved local file. Added reset adjustments, aligned before/after wipe comparison, settings JSON download, direct access to the latest result, source filenames and search/status filtering for saved runs. Completed AI reports now show event totals and a readable per-rule frame-assessment table, including explicit cannot-assess coverage. Zero events are not presented as proof of legal driving.
+
+No new dependencies or model downloads. Full test suite passed after the navigation/comparison changes; focused UI tests also cover retained selections, reset, lazy AI controls, report coverage, matching comparison coordinates, and damaged history metadata. The live browser accessibility tree confirms the new workspace is served at port 8511; screenshot capture was unavailable in this browser session. This changes usability, not detector accuracy or automatic road calibration.
+
+### 9 October - dedicated web studio and deeper IVP
+
+The default launcher now serves a custom local HTML/CSS/JavaScript application through `web_server.py` at port 8511. The previous Streamlit app remains available separately for classroom demos. No dependencies or models were installed for this upgrade. New frontend assets use system fonts and no external CDN.
+
+The studio has a responsive three-column workspace, a before/after wipe, live grouped controls, undo/redo, settings JSON import/export, source/settings/timestamp recovery across refreshes, separate feature and stage views, a searchable result library, reusable run settings, incremental video jobs and cancellation, and asynchronous local scene reviews. Uploaded bytes stream to disk. The local API validates settings, serializes expensive interactive operations, restricts paths, validates Host/Origin and requires a session token for POST requests. It is a loopback app, not a public hosting deployment.
+
+Added IVP exposure scaling, bounded gray-world white balance, luminance-percentile contrast stretching, HSV saturation adjustment, and entropy measurement. Added Sobel magnitude, absolute Laplacian, morphological gradient, top-hat and black-hat views with explanations. All new colour enhancements default to disabled. Original RGB and original-colour masks remain preserved. Adaptive white balance/stretching can vary with scene content in videos; the interface documents that limitation.
+
+The region inspector measures a rectangle on the same prepared/processed pixels, returns brightness/contrast/detail/clipping/entropy and histograms, maps corner pixel centres to the original frame, and exports a region JSON record. This is optional IVP inspection, not a rule-calibration zone.
+
+Reliability fix: older real runs exposed intermittent Windows access-denied failures replacing status.json. JSON writes now use a unique temporary file per writer and bounded retries on transient PermissionError, with concurrent-write and denial-retry regression tests.
+
+Validation: 121 tests passed, including real HTTP upload/preview/export and source-resume tests, invalid/corrupt input and request-boundary checks, new IVP math/coordinate checks, and existing video/AI tests. Live browser checks exercised sample loading, Low light, before/after output, region drawing and measured coordinates, Sobel view, and image export. Narrow-panel and desktop layouts were inspected. A live API video run (`20261009-192955-3ac8a921`) exported a 4.0-second MP4 retaining audio. A real local Qwen review completed in 12.38 seconds. Real image detection through the new API completed in run `20261009-193524-43ad1caa`; eight downloads are available. Evidence metadata is in ignored `temp/web-smoke.json` and `temp/web-ai-smoke.json`.
+
+This upgrade improves IVP exploration and product usability. It does not establish reliable automatic calibration, all nine rule categories, or improved detection accuracy. No GitHub push was performed in this turn.
+
+
+## 17 October 2026 - Indian traffic and classical speed measurement
+
+Sourced three genuine Delhi street clips, including a crowded junction, from credited Pexels pages. Tested all 1,091 frames; every output presentation timestamp matched its source. Added first-frame camera registration, forward/backward optical-flow checks, merge-aware association and stable-trajectory speed. Added independent user-selected feature tracking; the browser demo follows a bus-rear patch for 238 frames before withholding further output on uncertain registration. Four-point measured road calibration enables estimated km/h, while uncalibrated footage explicitly remains in px/s. No real-world km/h accuracy or reliable crowded-vehicle count is claimed.
+
+Final browser demo: runs/20261017-163309-d2a43c3a. Complete suite: 172 passing tests; JS syntax passes. Detailed sources, validation and limitations: docs/INDIAN_TRAFFIC_VALIDATION.md. New dependencies: none. Windows launcher and setup defaults now use H-drive Python, downloads and cache paths.
+
+
+## 17 October 2026 - automatic multi-object tracking
+
+Added foreground-seeded corner tracking for the pure-IVP mode and a separate, explicitly labelled local YOLO11s + ByteTrack vehicle mode. The vehicle mode requires no per-vehicle selection, handles short detection gaps, and retains IVP camera correction, flow, foreground measurements, timestamp speed and road-plane calibration. Default output is full-size annotated video; the four-panel IVP view remains selectable. Manual target controls are optional and hidden in vehicle mode.
+
+Added the credited 20-second Indian city sample. Four independently marked source vehicles matched at all 12 checked observations with stable IDs; this is a small development check, not a complete accuracy benchmark. Full exports verified: city600 frames, crowded Delhi335 frames, IVP-only highway450 frames, all with zero timestamp error and valid evidence ZIPs. Browser playback reached the end; live CSV/ZIP downloads matched disk artifacts, and incomplete km/h calibration was rejected. 185 tests and JavaScript syntax checks passed. Details and run IDs: `docs/AUTOMATIC_TRACKING.md`.
+
+Speed remains pixels/second without a measured scene calibration. Indian video km/h accuracy, full-scene count accuracy, and arbitrary dense-occlusion identity reliability remain unverified. No models or dependencies were installed, no cloud calls were used for processing, and no Git changes were published in this pass.
+
+
+## 17 October 2026 - crowded-scene measurement audit
+
+Added a reproducible Delhi source-frame identity check and independent static-landmark patch checks. Delhi matches 15/16 checked boxes with one persistent auto-rickshaw ID change; the distant bus is missed late. Landmark registration median0.949 px/max3.449 px over13 accepted checks (3 rejected) supports local geometry but does not establish speed accuracy. Proposal filtering and native-feature BoT-SORT did not fix the identity change and are not enabled in the app.
+
+Retained a tested ambiguity guard: nested vehicle hypotheses sharing a bottom contact point get a question mark, no speed and no crossing event until ambiguity clears. Added calibrated speed recovery regression: a gap clears history, then a fresh window recovers known36 km/h; outside-patch motion is rejected. 188 tests pass. Final runs: Delhi `20261017-175009-ee8cdcb1`, city `20261017-175112-353b8a6d`; both exact-timing exports reopen and evidence ZIPs validate. The city spot check remains12/12 with no checked ID changes. Detailed evidence: `docs/AUTOMATIC_TRACKING.md`.
+
+
+## October 17 evening — calibration and real browser acceptance
+
+Bound road calibration to the current source revision and frame zero; changing/reloading footage clears corners and measured dimensions. Protected first-frame marking from pending previews. Added cancellation checks after packaging and a clean-retry regression. Fixed job polling stopping on transient unknown status. Final checks: 194 Python tests and one JavaScript lifecycle test pass. A Windows HTTP boundary test intermittently aborted in earlier attempts; root cause remains unconfirmed, final rerun passed.
+
+Fresh no-selection city run: `runs/20261017-222216-1995765e`, 600 frames, zero timestamp error, 12/12 checked observations and no checked ID changes. Video playback and CSV/ZIP downloads verified in the browser. Existing Delhi limitation remains: 15/16 observations, one ID change. No measured-road truth is available for these sample videos, so their speed is px/s. Live app: http://127.0.0.1:8511/; start with Start.cmd. No installs, model downloads, commits or publication in this pass.
+
+
+## October 17 overnight — crowded-scene association
+
+Default vehicle association now includes bottom-centre continuity alongside overlap. Full Delhi check improved from 15/16 with one ID change to 15/16 with no checked ID changes; missing bus remains. City retains 12/12. An additional street-intersection check improved from 5/7 to 6/7. App run `20261017-224901-37a58e31` is complete and browser-playable. Geometry/occlusion tests added; 201 Python tests pass. Reproduced and fixed early-rejection Windows socket resets in code; healthy live server left running, so that backend fix applies next launch. Next work: profile actual processing cost before choosing performance changes.

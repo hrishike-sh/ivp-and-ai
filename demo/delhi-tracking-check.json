@@ -1,0 +1,273 @@
+{
+  "source": "india-delhi-overhead.mp4",
+  "source_sha256": "180a1af2150b10c29bdf1d0401783f79f8b2cfd2bf88eeb2d6604e5ecf814595",
+  "coordinate_size": [
+    540,
+    960
+  ],
+  "note": "Development spot check from original source frames, never used to seed tracking. The hatchback is partly occluded in late frames; boxes describe visible extents. Not exhaustive or independent evaluation. No reference speed or measured road dimensions.",
+  "observations": [
+    {
+      "object": "blue bus",
+      "time": 2,
+      "box": [
+        183,
+        450,
+        319,
+        578
+      ]
+    },
+    {
+      "object": "black e-rickshaw",
+      "time": 2,
+      "box": [
+        25,
+        754,
+        158,
+        911
+      ]
+    },
+    {
+      "object": "blue-back auto",
+      "time": 2,
+      "box": [
+        304,
+        806,
+        432,
+        959
+      ]
+    },
+    {
+      "object": "white hatchback",
+      "time": 2,
+      "box": [
+        394,
+        657,
+        495,
+        759
+      ]
+    },
+    {
+      "object": "blue bus",
+      "time": 5,
+      "box": [
+        199,
+        404,
+        280,
+        495
+      ]
+    },
+    {
+      "object": "black e-rickshaw",
+      "time": 5,
+      "box": [
+        48,
+        732,
+        178,
+        892
+      ]
+    },
+    {
+      "object": "blue-back auto",
+      "time": 5,
+      "box": [
+        365,
+        714,
+        445,
+        873
+      ]
+    },
+    {
+      "object": "white hatchback",
+      "time": 5,
+      "box": [
+        336,
+        573,
+        436,
+        650
+      ]
+    },
+    {
+      "object": "blue bus",
+      "time": 8,
+      "box": [
+        240,
+        369,
+        287,
+        428
+      ]
+    },
+    {
+      "object": "black e-rickshaw",
+      "time": 8,
+      "box": [
+        140,
+        683,
+        240,
+        831
+      ]
+    },
+    {
+      "object": "blue-back auto",
+      "time": 8,
+      "box": [
+        409,
+        671,
+        482,
+        789
+      ]
+    },
+    {
+      "object": "white hatchback",
+      "time": 8,
+      "box": [
+        351,
+        521,
+        409,
+        580
+      ]
+    },
+    {
+      "object": "blue bus",
+      "time": 10,
+      "box": [
+        299,
+        355,
+        337,
+        410
+      ]
+    },
+    {
+      "object": "black e-rickshaw",
+      "time": 10,
+      "box": [
+        206,
+        669,
+        309,
+        788
+      ]
+    },
+    {
+      "object": "blue-back auto",
+      "time": 10,
+      "box": [
+        450,
+        640,
+        511,
+        735
+      ]
+    },
+    {
+      "object": "white hatchback",
+      "time": 10,
+      "box": [
+        376,
+        518,
+        416,
+        553
+      ]
+    }
+  ],
+  "landmarks": [
+    {
+      "name": "blue sign upper-left corner",
+      "reference": [
+        171,
+        335
+      ],
+      "search_centres": {
+        "2": [
+          177,
+          314
+        ],
+        "5": [
+          204,
+          290
+        ],
+        "8": [
+          253,
+          282
+        ],
+        "10": [
+          310,
+          295
+        ]
+      }
+    },
+    {
+      "name": "blue sign lower-right corner",
+      "reference": [
+        269,
+        377
+      ],
+      "search_centres": {
+        "2": [
+          276,
+          356
+        ],
+        "5": [
+          302,
+          335
+        ],
+        "8": [
+          351,
+          331
+        ],
+        "10": [
+          408,
+          344
+        ]
+      }
+    },
+    {
+      "name": "left tip of streetlamp",
+      "reference": [
+        296,
+        232
+      ],
+      "search_centres": {
+        "2": [
+          301,
+          208
+        ],
+        "5": [
+          333,
+          187
+        ],
+        "8": [
+          386,
+          181
+        ],
+        "10": [
+          447,
+          192
+        ]
+      }
+    },
+    {
+      "name": "white rooftop block",
+      "reference": [
+        72,
+        254
+      ],
+      "search_centres": {
+        "2": [
+          78,
+          232
+        ],
+        "5": [
+          111,
+          215
+        ],
+        "8": [
+          167,
+          215
+        ],
+        "10": [
+          226,
+          225
+        ]
+      }
+    }
+  ]
+}

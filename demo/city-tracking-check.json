@@ -1,0 +1,131 @@
+{
+  "source": "india-city.mp4",
+  "coordinate_size": [
+    960,
+    540
+  ],
+  "note": "Small manually reviewed development spot check. Boxes were marked on original source frames, not tracker output. These annotations are for validation only and are never used to initialize tracking. Not an exhaustive traffic benchmark; no speed ground truth.",
+  "observations": [
+    {
+      "object": "central red car",
+      "time": 2,
+      "box": [
+        367,
+        260,
+        419,
+        316
+      ]
+    },
+    {
+      "object": "central red car",
+      "time": 4,
+      "box": [
+        352,
+        274,
+        414,
+        338
+      ]
+    },
+    {
+      "object": "central red car",
+      "time": 6,
+      "box": [
+        233,
+        356,
+        360,
+        482
+      ]
+    },
+    {
+      "object": "large brown bus",
+      "time": 2,
+      "box": [
+        487,
+        210,
+        537,
+        302
+      ]
+    },
+    {
+      "object": "large brown bus",
+      "time": 4,
+      "box": [
+        458,
+        237,
+        531,
+        365
+      ]
+    },
+    {
+      "object": "large brown bus",
+      "time": 6,
+      "box": [
+        355,
+        304,
+        519,
+        540
+      ]
+    },
+    {
+      "object": "right yellow roof taxi",
+      "time": 2,
+      "box": [
+        586,
+        270,
+        642,
+        341
+      ]
+    },
+    {
+      "object": "right yellow roof taxi",
+      "time": 4,
+      "box": [
+        590,
+        288,
+        659,
+        360
+      ]
+    },
+    {
+      "object": "right yellow roof taxi",
+      "time": 6,
+      "box": [
+        650,
+        344,
+        781,
+        452
+      ]
+    },
+    {
+      "object": "central white car",
+      "time": 2,
+      "box": [
+        403,
+        221,
+        443,
+        264
+      ]
+    },
+    {
+      "object": "central white car",
+      "time": 4,
+      "box": [
+        395,
+        228,
+        440,
+        273
+      ]
+    },
+    {
+      "object": "central white car",
+      "time": 6,
+      "box": [
+        389,
+        238,
+        433,
+        287
+      ]
+    }
+  ],
+  "source_sha256": "bab6028596dae259311581a1b28a306b89835b09608596a9f4dd74b3329ac1b7"
+}

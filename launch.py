@@ -16,9 +16,9 @@ URL = "http://127.0.0.1:8511"
 
 def healthy():
     try:
-        with urllib.request.urlopen(URL + "/_stcore/health", timeout=1) as response:
-            return response.status == 200 and response.read() == b"ok"
-    except OSError:
+        with urllib.request.urlopen(URL + "/api/health", timeout=1) as response:
+            return response.status == 200 and json.load(response).get("app") == "traffic-lab-web"
+    except (OSError, ValueError):
         return False
 
 
@@ -35,8 +35,7 @@ def main():
         (ROOT / "temp").mkdir(exist_ok=True)
         options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
         with (ROOT / "temp" / "server.log").open("ab") as log:
-            process = subprocess.Popen([sys.executable, "-m", "streamlit", "run", str(ROOT / "app.py"),
-                                        "--server.address", "127.0.0.1", "--server.port", "8511", "--server.headless", "true"],
+            process = subprocess.Popen([sys.executable, str(ROOT / "web_server.py"), "--port", "8511"],
                                        cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, **options)
         (ROOT / "temp" / "server.json").write_text(json.dumps({"pid": process.pid, "url": URL}), encoding="utf-8")
         for _ in range(120):

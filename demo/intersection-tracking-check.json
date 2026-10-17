@@ -1,0 +1,81 @@
+{
+  "source": "india-intersection.mp4",
+  "source_sha256": "443c4397678bd4b9fcf15ef1f5b48a1e9de381cfb8061e6dacaced97db33b768",
+  "coordinate_size": [
+    540,
+    960
+  ],
+  "note": "Small additional source-frame check selected before running the candidate on this clip. Manual visible extents, not supplied to inference. Taxi episodes are separate across prolonged total occlusion by the large truck. No physical-speed ground truth.",
+  "observations": [
+    {
+      "object": "taxi before long occlusion",
+      "time": 1,
+      "box": [
+        284,
+        463,
+        503,
+        550
+      ]
+    },
+    {
+      "object": "taxi before long occlusion",
+      "time": 3,
+      "box": [
+        252,
+        480,
+        473,
+        566
+      ]
+    },
+    {
+      "object": "taxi after long occlusion",
+      "time": 9,
+      "box": [
+        199,
+        464,
+        417,
+        550
+      ]
+    },
+    {
+      "object": "white box truck",
+      "time": 7,
+      "box": [
+        50,
+        429,
+        255,
+        551
+      ]
+    },
+    {
+      "object": "white box truck",
+      "time": 9,
+      "box": [
+        39,
+        403,
+        160,
+        572
+      ]
+    },
+    {
+      "object": "white box truck",
+      "time": 11,
+      "box": [
+        232,
+        378,
+        539,
+        606
+      ]
+    },
+    {
+      "object": "red e-rickshaw",
+      "time": 7,
+      "box": [
+        189,
+        455,
+        375,
+        583
+      ]
+    }
+  ]
+}

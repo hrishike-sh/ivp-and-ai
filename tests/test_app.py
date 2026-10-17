@@ -33,7 +33,7 @@ def test_completed_ai_run_exposes_scene_observations(tmp_path):
     Image.new("RGB", (20, 20)).save(run / "processed.png")
     Image.new("RGB", (20, 20)).save(run / "detections.png")
     write_json(run / "status.json", {"state": "complete", "progress": 1., "updated_at": now(), "message": "Ready"})
-    write_json(run / "report.json", {"ai": {"events_by_rule": {}, "assessment_counts": {}}})
+    write_json(run / "report.json", {"source": "test-street.png", "ai": {"events_by_rule": {}, "assessment_counts": {"red_light/cannot_assess": 1}}})
     write_json(scene / "scene.json", {"sign_observations": [{"label": "No vehicles", "status": "recognised_candidate",
                                                            "proposal_source": "ivp_colour_shape", "reason": "Approach unresolved"}]})
     app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py"), default_timeout=20)
@@ -43,6 +43,7 @@ def test_completed_ai_run_exposes_scene_observations(tmp_path):
     assert app.selectbox(key="scene_" + run.name).value == "0001"
     assert {"Detected objects", "Reported violations"} <= {tab.label for tab in app.tabs}
     assert any("Sign" in frame.value.columns and frame.value.iloc[0]["Sign"] == "No vehicles" for frame in app.dataframe)
+    assert any("Assessment" in frame.value.columns and "cannot assess" in frame.value["Assessment"].values for frame in app.dataframe)
 
 
 def test_classroom_samples_and_saved_examples():
@@ -50,10 +51,31 @@ def test_classroom_samples_and_saved_examples():
     app.selectbox(key="demo_sample").select("Low-light street · simulated darkness").run()
     app.selectbox(key="preset").select("Low light").run()
     assert not app.exception
+    app.radio(key="workspace_view").set_value("Quality + histograms").run()
     assert app.metric[0].value
+    app.radio(key="page").set_value("Classroom demo").run()
     for example in ["Crossing segmentation", "Traffic-sign recognition", "Road users + video"]:
         app.selectbox(key="classroom_example").select(example).run()
         assert not app.exception
+
+
+def test_workspace_navigation_reset_and_comparison():
+    app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py"), default_timeout=20).run()
+    assert app.radio(key="page").value == "Workspace"
+    app.selectbox(key="demo_sample").select("Low-light street · simulated darkness").run()
+    app.selectbox(key="preset").select("Low light").run()
+    next(r for r in app.radio if r.label == "Comparison layout").set_value("Wipe comparison").run()
+    assert not app.exception
+    app.radio(key="page").set_value("Saved runs").run()
+    assert not app.exception
+    app.radio(key="page").set_value("Workspace").run()
+    assert app.selectbox(key="demo_sample").value == "Low-light street · simulated darkness"
+    assert app.slider(key="cfg_gamma").value == 1.5
+    next(b for b in app.button if b.label == "Reset adjustments").click().run()
+    assert app.slider(key="cfg_gamma").value == 1.0
+    app.radio(key="workspace_view").set_value("AI analysis").run()
+    assert any(b.label == "Review this frame with local vision" for b in app.button)
+    assert not app.exception
 
 
 def test_streamed_download_range_and_unregistered_path(tmp_path):

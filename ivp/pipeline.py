@@ -25,8 +25,18 @@ class Settings:
     value_min: int = 70
     line_length: int = 50
     scene_threshold: float = 0.45
+    exposure: float = 0.0
+    white_balance: float = 0.0
+    stretch: float = 0.0
+    saturation: float = 1.0
 
     def __post_init__(self):
+        if not all(np.isfinite(v) for v in (self.exposure, self.white_balance, self.stretch, self.saturation)):
+            raise ValueError("Colour adjustments must be finite numbers.")
+        if not -3 <= self.exposure <= 3 or not 0 <= self.white_balance <= 1:
+            raise ValueError("Exposure must be -3 to 3 stops; white balance strength must be 0 to 1.")
+        if not 0 <= self.stretch <= 10 or not 0 <= self.saturation <= 2:
+            raise ValueError("Contrast clipping must be 0 to 10 percent; saturation must be 0 to 2.")
         if self.max_width < 0 or self.kernel not in (3, 5, 7, 9):
             raise ValueError("Resize width must be non-negative; filter size must be 3, 5, 7, or 9.")
         if self.denoise not in ("Off", "Gaussian", "Median", "Bilateral"):
@@ -57,6 +67,8 @@ PRESETS = {
     "Low light": Settings(gamma=1.5, clahe=True, denoise="Bilateral"),
     "Noisy footage": Settings(denoise="Median", kernel=3),
     "Road features": Settings(denoise="Gaussian", clahe=True, canny_low=45, canny_high=130),
+    "Colour cast": Settings(white_balance=0.65),
+    "Flat contrast": Settings(stretch=1.0),
 }
 
 
@@ -79,6 +91,9 @@ def quality(rgb):
     blur = float(cv2.Laplacian(gray, cv2.CV_64F).var())
     highlights = float(np.mean(gray >= 245))
     shadows = float(np.mean(gray <= 10))
+    probabilities = np.bincount(gray.ravel(), minlength=256) / gray.size
+    nonzero = probabilities[probabilities > 0]
+    entropy = float(-np.sum(nonzero * np.log2(nonzero)))
     flags = []
     if brightness < 55:
         flags.append("Dark frame")
@@ -89,7 +104,7 @@ def quality(rgb):
     if blur < 70:
         flags.append("Low edge detail / possible blur")
     return {"brightness": brightness, "contrast": contrast, "laplacian_variance": blur,
-            "highlight_fraction": highlights, "shadow_fraction": shadows, "flags": flags}
+            "highlight_fraction": highlights, "shadow_fraction": shadows, "entropy_bits": entropy, "flags": flags}
 
 
 def histogram(rgb):
@@ -132,6 +147,10 @@ def extract_features(rgb, original_rgb, settings):
     else:
         _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     edges = cv2.Canny(gray, settings.canny_low, settings.canny_high)
+    gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0)
+    gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1)
+    gradient = cv2.normalize(cv2.magnitude(gx, gy), None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    morph_kernel = np.ones((settings.morph_kernel, settings.morph_kernel), np.uint8)
     cleaned = cleanup(binary, settings)
     contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     contour_view = rgb.copy()
@@ -176,6 +195,11 @@ def extract_features(rgb, original_rgb, settings):
         "White marking mask": cleanup(white, settings), "Edges": edges,
         "Threshold": binary, "Morphology": cleaned, "Contours": contour_view,
         "Lines": line_view, "Road candidates": road, "Stripe mask": stripe_mask,
+        "Sobel magnitude": gradient,
+        "Laplacian": cv2.convertScaleAbs(cv2.Laplacian(gray, cv2.CV_32F)),
+        "Morphological gradient": cv2.morphologyEx(gray, cv2.MORPH_GRADIENT, morph_kernel),
+        "Top hat": cv2.morphologyEx(gray, cv2.MORPH_TOPHAT, morph_kernel),
+        "Black hat": cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, morph_kernel),
     }, {"stripe_boxes": stripe_boxes, "horizontal_segments": horizontal,
         "line_count": len(line_list), "contour_count": len(contours),
         "warning": "Appearance candidates only. No crossing, stop-line, signal, or violation classification."}
@@ -202,6 +226,20 @@ def process_frame(rgb, settings=None, timestamp=0.0, include_features=True, incl
         out = cv2.bilateralFilter(out, settings.kernel, 45, 45)
     if include_stages:
         stages["Denoised"] = out.copy()
+    if settings.white_balance:
+        means = out.mean(axis=(0, 1))
+        gains = np.clip(means.mean() / np.maximum(means, 1), 0.5, 2)
+        gains = 1 + settings.white_balance * (gains - 1)
+        out = np.clip(np.round(out.astype(np.float32) * gains), 0, 255).astype(np.uint8)
+    if settings.exposure:
+        out = np.clip(np.round(out.astype(np.float32) * 2 ** settings.exposure), 0, 255).astype(np.uint8)
+    if settings.stretch:
+        luminance = cv2.cvtColor(out, cv2.COLOR_RGB2GRAY)
+        low, high = np.percentile(luminance, [settings.stretch, 100 - settings.stretch])
+        if high - low > 1:
+            out = np.clip(np.round((out.astype(np.float32) - low) * 255 / (high - low)), 0, 255).astype(np.uint8)
+    if include_stages:
+        stages["Colour + exposure"] = out.copy()
     if settings.gamma != 1:
         lut = np.round((np.arange(256) / 255) ** (1 / settings.gamma) * 255).astype(np.uint8)
         out = cv2.LUT(out, lut)
@@ -214,11 +252,19 @@ def process_frame(rgb, settings=None, timestamp=0.0, include_features=True, incl
     if settings.sharpen:
         soft = cv2.GaussianBlur(out, (0, 0), 1.2)
         out = cv2.addWeighted(out, 1 + settings.sharpen, soft, -settings.sharpen, 0)
+    if settings.saturation != 1:
+        hsv_out = cv2.cvtColor(out, cv2.COLOR_RGB2HSV)
+        hsv_out[:, :, 1] = np.clip(hsv_out[:, :, 1].astype(np.float32) * settings.saturation, 0, 255).astype(np.uint8)
+        out = cv2.cvtColor(hsv_out, cv2.COLOR_HSV2RGB)
     if include_stages:
         stages["Final colour"] = out.copy()
     features, candidates = extract_features(out, original, settings) if include_features else ({}, {})
     dest_h, dest_w = out.shape[:2]
     sx, sy = source_w / dest_w, source_h / dest_h
     mapping = np.array([[sx, 0, (sx - 1) / 2], [0, sy, (sy - 1) / 2], [0, 0, 1]], dtype=float)
+    before = quality(original)
+    # Identity processing is common for tracking. Reuse identical measurements
+    # without sharing the mutable flags list between the two report entries.
+    after = ({**before, "flags": before["flags"].copy()} if np.array_equal(original, out) else quality(out))
     return FrameResult(out, timestamp, (source_w, source_h), mapping,
-                       {"original": quality(original), "processed": quality(out)}, stages, features, candidates)
+                       {"original": before, "processed": after}, stages, features, candidates)

@@ -13,6 +13,9 @@ def test_original_preserves_pixels_and_no_alias():
     assert np.array_equal(rgb, result.color_rgb)
     assert not np.shares_memory(rgb, result.color_rgb)
     assert np.array_equal(result.transform_to_source, np.eye(3))
+    assert result.measurements['original'] == quality(rgb) == result.measurements['processed']
+    result.measurements['original']['flags'].append('Caller annotation')
+    assert 'Caller annotation' not in result.measurements['processed']['flags']
 
 
 def test_pixel_centre_mapping_and_aspect_ratio():

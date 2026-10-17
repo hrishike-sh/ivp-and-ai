@@ -57,6 +57,30 @@ def test_audio_timing_masks_and_output(source, tmp_path):
     assert len(rows) == 18
 
 
+def test_source_changed_after_preview_is_rejected(source, tmp_path):
+    from ivp.media import source_revision
+    run = request_run(tmp_path, source)
+    request = json.loads((run/'request.json').read_text())
+    request['info']['source_revision'] = source_revision(source)
+    write_json(run/'request.json', request)
+    source.touch()
+    with pytest.raises(ValueError, match='Source video changed'):
+        process_video(run)
+    assert read_status(run)['state'] == 'failed'
+    assert not (run/'processed.mp4').exists()
+
+
+def test_cancel_during_report_packaging(source, tmp_path):
+    run = request_run(tmp_path, source)
+    def finish():
+        (run/'motion-evidence.zip').write_bytes(b'pending evidence')
+        (run/'cancel.request').touch()
+        return {'ready': True}
+    process_video(run, final_hook=finish)
+    assert read_status(run)['state'] == 'cancelled'
+    assert not any((run/name).exists() for name in ('processed.mp4','report.json','motion-evidence.zip'))
+
+
 def test_ai_frame_hook_preserves_audio_and_presentation_times(source, tmp_path):
     run = request_run(tmp_path, source)
     calls = []
