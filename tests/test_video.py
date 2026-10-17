@@ -1,8 +1,12 @@
 import csv
 import json
+import os
 import subprocess
+import sys
+import time
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import av
 import numpy as np
@@ -221,6 +225,118 @@ def test_cancel_during_processing(source, tmp_path, monkeypatch):
     assert len(calls) == 3
     assert read_status(run)["state"] == "cancelled"
     assert not (run / "processed.mp4").exists()
+
+
+@pytest.mark.parametrize("stubborn", [False, True])
+@pytest.mark.parametrize("cancelled", [False, True], ids=["monitor-error", "cancel"])
+def test_mux_shutdown_preserves_cancellation_or_monitoring_error(source, tmp_path, monkeypatch, stubborn, cancelled):
+    import ivp.worker as worker
+
+    run = request_run(tmp_path, source)
+    original = source.read_bytes()
+    started = False
+    original_check = worker.check_cancel
+
+    class Muxer:
+        returncode = None
+        terminated = False
+        killed = False
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.terminated = True
+
+        def kill(self):
+            self.killed = True
+
+        def wait(self, timeout):
+            if stubborn and not self.killed:
+                raise subprocess.TimeoutExpired("test-muxer", timeout)
+            self.returncode = -9 if self.killed else -15
+            return self.returncode
+
+    process = Muxer()
+
+    def start_muxer(*args, **kwargs):
+        nonlocal started
+        started = True
+        (run / "processed.mp4").write_bytes(b"Incomplete mux output")
+        if cancelled:
+            cancel_job(run)
+        return process
+
+    def check_cancel(path):
+        if started and not cancelled:
+            raise RuntimeError("Mux monitoring interrupted")
+        original_check(path)
+
+    monkeypatch.setattr(worker.subprocess, "Popen", start_muxer)
+    monkeypatch.setattr(worker, "check_cancel", check_cancel)
+    if cancelled:
+        process_video(run)
+        assert read_status(run)["state"] == "cancelled"
+        for name in ("processed.mp4", "video.partial.mp4", "report.json"):
+            assert not (run / name).exists()
+    else:
+        with pytest.raises(RuntimeError, match="Mux monitoring interrupted"):
+            process_video(run)
+        assert read_status(run)["state"] == "failed"
+        assert read_status(run)["message"] == "Mux monitoring interrupted"
+    assert process.terminated
+    assert process.killed == stubborn
+    assert process.poll() is not None
+    assert source.read_bytes() == original
+
+
+@pytest.mark.skipif(os.name == "nt", reason="This case exercises a real child ignoring POSIX SIGTERM.")
+def test_cancelled_muxer_that_ignores_termination_is_reaped(source, tmp_path, monkeypatch):
+    import ivp.worker as worker
+
+    run = request_run(tmp_path, source)
+    original = source.read_bytes()
+    original_popen = subprocess.Popen
+    children = []
+    waits = []
+
+    def start_muxer(*args, **kwargs):
+        ready = run / "muxer.ready"
+        code = ("import signal,sys; from pathlib import Path; "
+                "signal.signal(signal.SIGTERM,signal.SIG_IGN); "
+                "Path(sys.argv[1]).write_text('ready'); sys.stdin.read()")
+        child = original_popen([sys.executable, "-c", code, str(ready)], stdin=subprocess.PIPE, **kwargs)
+        children.append(child)
+        deadline = time.monotonic() + 5
+        while not ready.exists():
+            assert child.poll() is None and time.monotonic() < deadline
+            time.sleep(.01)
+        (run / "processed.mp4").write_bytes(b"Incomplete mux output")
+        cancel_job(run)
+
+        def wait(timeout):
+            waits.append(timeout)
+            # Exercise a real ignored signal without spending ten seconds per test.
+            return child.wait(timeout=.1 if len(waits) == 1 else timeout)
+
+        return SimpleNamespace(poll=child.poll, terminate=child.terminate, kill=child.kill, wait=wait)
+
+    monkeypatch.setattr(worker.subprocess, "Popen", start_muxer)
+    try:
+        process_video(run)
+        assert read_status(run)["state"] == "cancelled"
+        assert len(children) == 1
+        assert children[0].poll() is not None
+        assert len(waits) == 2
+        for name in ("processed.mp4", "video.partial.mp4", "report.json"):
+            assert not (run / name).exists()
+        assert source.read_bytes() == original
+    finally:
+        for child in children:
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=5)
+            child.stdin.close()
 
 
 @pytest.mark.parametrize("phase", ["hook", "report"])

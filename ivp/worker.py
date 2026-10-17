@@ -133,7 +133,11 @@ def process_video(run, frame_hook=None, final_hook=None):
                     time.sleep(0.1)
             except BaseException:
                 process.terminate()
-                process.wait(timeout=10)
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=10)
                 raise
         if process.returncode:
             detail = (run / "ffmpeg.log").read_text(encoding="utf-8", errors="replace")[-700:]
