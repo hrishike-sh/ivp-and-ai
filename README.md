@@ -27,6 +27,8 @@ To rebuild the environment, run `powershell -NoProfile -ExecutionPolicy Bypass -
 
 Saved image exports are snapshots: changes to sliders do not alter an existing export. Save again to create another run. Video jobs capture the settings at the time Process entire video is clicked. Changing the preview afterwards does not change the running job.
 
+New uploads become available for processing only after the complete copy closes successfully. Failed copies are removed so a retry starts cleanly, and overlapping uploads of the same file cannot reuse a partially written source.
+
 ## Processing stages
 
 The colour pipeline is orientation correction → optional downsize preserving aspect ratio → denoising → gamma → optional CLAHE on Lab luminance → optional unsharp mask. Denoising choices are Gaussian, median, and bilateral. Gamma above 1 brightens, below 1 darkens. Sharpening strength 0 disables sharpening.

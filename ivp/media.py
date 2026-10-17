@@ -1,7 +1,9 @@
+import hashlib
 import io
 import json
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import av
@@ -17,6 +19,23 @@ def tool_path(name):
     path = shutil.which(name)
     if not path:
         raise MediaError(f"{name} is missing. Install FFmpeg, add its bin folder to PATH, then restart the app.")
+    return path
+
+
+def save_upload(upload, uploads_dir):
+    buffer = upload.getbuffer()
+    digest = hashlib.sha256(buffer).hexdigest()
+    folder = Path(uploads_dir) / digest[:20]
+    folder.mkdir(parents=True, exist_ok=True)
+    name = Path(upload.name.replace("\\", "/")).name
+    path = folder / name
+    if not path.exists():
+        with tempfile.TemporaryDirectory(prefix=".upload-", dir=folder) as staging:
+            temporary = Path(staging) / "source"
+            with temporary.open("wb") as file:
+                file.write(buffer)
+            if not path.exists():
+                temporary.replace(path)
     return path
 
 
