@@ -14,7 +14,7 @@ from .media import png_bytes, write_json
 from .motion import MotionAnalyzer
 from .incidents import IncidentAnalyzer
 from .incident_export import IncidentEvidence, draw_geometry
-from .worker import process_video, update
+from .worker import check_cancel, process_video, update
 
 
 def run_motion(run):
@@ -87,11 +87,15 @@ def run_motion(run):
             activity_file.flush(); crossing_file.flush(); track_file.flush()
             with zipfile.ZipFile(run/'motion-evidence.zip','w',zipfile.ZIP_DEFLATED) as archive:
                 for path in run.glob('motion-*'):
+                    check_cancel(run)
                     if path.suffix in ('.png','.csv','.json','.jsonl','.npy'):
                         archive.write(path,path.name)
                 for path in run.glob('incident-*.png'):
+                    check_cancel(run)
                     archive.write(path,path.name)
+                check_cancel(run)
                 archive.write(run/'coordinates.json','coordinates.json')
+                check_cancel(run)
                 archive.write(run/'request.json','request.json')
             return summary
         process_video(run,frame,finish,final_key='motion')
