@@ -19,7 +19,10 @@ URL = "http://127.0.0.1:8511"
 def healthy():
     try:
         with urllib.request.urlopen(URL + "/api/health", timeout=1) as response:
-            return response.status == 200 and json.load(response).get("app") == "traffic-lab-web"
+            if response.status != 200:
+                return False
+            payload = json.load(response)
+            return isinstance(payload, dict) and payload.get("app") == "traffic-lab-web"
     except (OSError, ValueError):
         return False
 
