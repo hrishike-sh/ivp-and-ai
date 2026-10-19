@@ -20,8 +20,11 @@ class AvailablePort:
     def __exit__(self, *args):
         pass
 
-    def connect_ex(self, address):
-        return 1
+    def settimeout(self, timeout):
+        pass
+
+    def connect(self, address):
+        raise ConnectionRefusedError("Port is unused")
 
 
 @pytest.fixture

@@ -94,7 +94,14 @@ def _cleanup_failed_start(process):
 def _ensure_server():
     if not healthy():
         with socket.socket() as sock:
-            if sock.connect_ex(("127.0.0.1", 8511)) == 0:
+            sock.settimeout(1)
+            try:
+                sock.connect(("127.0.0.1", 8511))
+            except ConnectionRefusedError:
+                pass
+            except OSError as exc:
+                raise SystemExit(f"Could not check port 8511: {exc}. Stop any stalled service on this port, then retry Start.cmd.") from exc
+            else:
                 raise SystemExit("Port 8511 is occupied by another service. Close it before starting Traffic Lab.")
         (ROOT / "temp").mkdir(exist_ok=True)
         options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}

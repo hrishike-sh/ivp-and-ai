@@ -65,9 +65,11 @@ def test_nonobject_health_response_preserves_the_port_conflict_diagnostic(health
         def __exit__(self, *args):
             pass
 
-        def connect_ex(self, address):
+        def settimeout(self, timeout):
+            pass
+
+        def connect(self, address):
             assert address == ("127.0.0.1", 8511)
-            return 0
 
     def unexpected_start(*args, **kwargs):
         pytest.fail("An occupied port must not start a competing server")
