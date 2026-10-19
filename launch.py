@@ -6,6 +6,7 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 import webbrowser
@@ -91,6 +92,21 @@ def _cleanup_failed_start(process):
             saved.unlink()
 
 
+def _publish_server_pid(pid):
+    destination = ROOT / "temp" / "server.json"
+    with tempfile.TemporaryDirectory(prefix=".server-", dir=destination.parent) as directory:
+        temporary = Path(directory) / destination.name
+        temporary.write_text(json.dumps({"pid": pid, "url": URL}), encoding="utf-8")
+        for attempt in range(8):
+            try:
+                temporary.replace(destination)
+                return
+            except PermissionError:
+                if attempt == 7:
+                    raise
+                time.sleep(.02 * (attempt + 1))
+
+
 def _ensure_server():
     if not healthy():
         with socket.socket() as sock:
@@ -110,7 +126,7 @@ def _ensure_server():
             with (ROOT / "temp" / "server.log").open("ab") as log:
                 process = subprocess.Popen([sys.executable, str(ROOT / "web_server.py"), "--port", "8511"],
                                            cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, **options)
-            (ROOT / "temp" / "server.json").write_text(json.dumps({"pid": process.pid, "url": URL}), encoding="utf-8")
+            _publish_server_pid(process.pid)
             for _ in range(120):
                 if healthy():
                     break

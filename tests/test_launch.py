@@ -80,7 +80,7 @@ def test_healthy_server_during_startup_still_waits_for_pid_publication(launcher,
         return SimpleNamespace(pid=4000, poll=lambda: None)
 
     def delayed_pid_write(path, *args, **kwargs):
-        if path == saved:
+        if path.name == saved.name and path.is_relative_to(saved.parent):
             writing_pid.set()
             assert release_write.wait(timeout=3)
         return original_write(path, *args, **kwargs)
@@ -155,10 +155,11 @@ def test_pid_publication_failure_stops_the_new_child_and_preserves_another_pid(l
         children.append(child)
         return child
 
-    def fail_pid_write(path, *args, **kwargs):
-        if path == saved:
+    def fail_pid_write(path, text, *args, **kwargs):
+        if path.name == saved.name and path.is_relative_to(folder):
+            original_write(path, '{"pid":', *args, **kwargs)
             raise OSError("Cannot publish server PID")
-        return original_write(path, *args, **kwargs)
+        return original_write(path, text, *args, **kwargs)
 
     monkeypatch.setattr(launch, "healthy", lambda: False)
     monkeypatch.setattr(subprocess, "Popen", start_child)
