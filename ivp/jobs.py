@@ -103,6 +103,23 @@ def refreshed_status(run):
     return state
 
 
+def _stop_starting_worker(process):
+    if process.poll() is not None:
+        return
+    try:
+        process.terminate()
+    except ProcessLookupError:
+        pass
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+        process.wait(timeout=5)
+
+
 def start_video(path, info, settings, selected_masks, ai=False, motion=None):
     executable, module = sys.executable, "ivp.worker"
     if motion is not None:
@@ -134,15 +151,20 @@ def start_video(path, info, settings, selected_masks, ai=False, motion=None):
                    "settings": settings.to_dict(), "selected_masks": selected_masks, "created_at": now(), "ai": ai,
                    'motion': motion})
         write_json(run / "status.json", {"state": "queued", "progress": 0, "updated_at": now(), "message": "Starting video worker."})
+        process = None
         try:
             with (run / "worker.log").open("wb") as log:
                 process = subprocess.Popen([executable, "-m", module, str(run)], cwd=ROOT,
                                            stdout=log, stderr=subprocess.STDOUT, **hidden_process_options())
-        except OSError as exc:
+            write_json(run / "process.json", {"pid": process.pid})
+        except BaseException as exc:
+            if process is not None:
+                _stop_starting_worker(process)
             message = f"Could not start the processing worker: {exc}"
             write_json(run / "status.json", {"state": "failed", "progress": 0, "updated_at": now(), "message": message})
-            raise RuntimeError(message) from exc
-        write_json(run / "process.json", {"pid": process.pid})
+            if isinstance(exc, OSError):
+                raise RuntimeError(message) from exc
+            raise
         return run
 
 
