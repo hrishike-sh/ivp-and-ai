@@ -1,6 +1,7 @@
 import argparse
 import contextlib
 import errno
+import http.client
 import json
 import os
 import socket
@@ -24,7 +25,7 @@ def healthy():
                 return False
             payload = json.load(response)
             return isinstance(payload, dict) and payload.get("app") == "traffic-lab-web"
-    except (OSError, ValueError):
+    except (OSError, ValueError, http.client.HTTPException):
         return False
 
 
