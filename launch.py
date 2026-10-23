@@ -64,7 +64,7 @@ def startup_lock(timeout=35):
                 if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
                     raise
                 if time.monotonic() >= deadline:
-                    raise SystemExit("Another Traffic Lab launcher is still starting. Wait for it to finish, then retry Start.cmd.") from exc
+                    raise SystemExit("Another IVP Lab launcher is still starting. Wait for it to finish, then retry Start.cmd.") from exc
                 time.sleep(.1)
         try:
             yield
@@ -111,7 +111,9 @@ def _publish_server_pid(pid):
 def _ensure_server():
     if not healthy():
         with socket.socket() as sock:
-            sock.settimeout(1)
+            # Windows can take just over one second to reject an unused
+            # loopback port. Keep a bound without treating that as a stall.
+            sock.settimeout(3)
             try:
                 sock.connect(("127.0.0.1", 8511))
             except ConnectionRefusedError:
@@ -119,7 +121,7 @@ def _ensure_server():
             except OSError as exc:
                 raise SystemExit(f"Could not check port 8511: {exc}. Stop any stalled service on this port, then retry Start.cmd.") from exc
             else:
-                raise SystemExit("Port 8511 is occupied by another service. Close it before starting Traffic Lab.")
+                raise SystemExit("Port 8511 is occupied by another service. Close it before starting IVP Lab.")
         (ROOT / "temp").mkdir(exist_ok=True)
         options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
         process = None
@@ -150,7 +152,7 @@ def main():
         raise SystemExit("Use the isolated Python 3.11 environment: double-click Start.cmd.")
     with startup_lock():
         _ensure_server()
-    print("Traffic Lab is running at " + URL)
+    print("IVP Lab is running at " + URL)
     if not args.no_browser:
         webbrowser.open(URL)
 

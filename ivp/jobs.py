@@ -120,23 +120,12 @@ def _stop_starting_worker(process):
         process.wait(timeout=5)
 
 
-def start_video(path, info, settings, selected_masks, ai=False, motion=None):
-    executable, module = sys.executable, "ivp.worker"
+def start_video(path, info, settings, selected_masks, motion=None):
+    executable = sys.executable
+    module = "ivp.motion_worker" if motion is not None else "ivp.worker"
     if motion is not None:
-        if ai:
-            raise ValueError('Choose IVP motion or AI analysis separately.')
-        module = 'ivp.motion_worker'
-        if motion.get('tracking_mode')=='vehicles':
-            from traffic_ai.runtime import python_path, runtime_root
-            executable=str(python_path())
-            if not Path(executable).is_file() or not (runtime_root()/'models'/'yolo11s.pt').is_file():
-                raise RuntimeError('Local vehicle detection is not installed. Run Setup-AI.ps1 or choose IVP-only moving objects.')
-    if ai:
-        from traffic_ai.runtime import python_path
-
-        executable, module = str(python_path()), "traffic_ai.worker"
-        if not Path(executable).is_file():
-            raise RuntimeError("AI runtime is missing. Run Setup-AI.ps1 in the project folder first.")
+        from .motion import MotionAnalyzer
+        MotionAnalyzer(**motion)
     with job_lock():
         recent = sorted(RUNS.glob("*/status.json"), reverse=True)
         for status_path in recent:
@@ -148,7 +137,7 @@ def start_video(path, info, settings, selected_masks, ai=False, motion=None):
                 write_json(status_path, {**state, "state": "interrupted", "message": "Previous worker stopped unexpectedly.", "updated_at": now()})
         run = new_run()
         write_json(run / "request.json", {"source": str(Path(path).resolve()), "info": info,
-                   "settings": settings.to_dict(), "selected_masks": selected_masks, "created_at": now(), "ai": ai,
+                   "settings": settings.to_dict(), "selected_masks": selected_masks, "created_at": now(),
                    'motion': motion})
         write_json(run / "status.json", {"state": "queued", "progress": 0, "updated_at": now(), "message": "Starting video worker."})
         process = None

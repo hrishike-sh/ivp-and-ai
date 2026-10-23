@@ -8,6 +8,7 @@ from .speed import SpeedEstimator
 from .stabilization import TranslationStabilizer
 from .target_track import SelectedTarget
 from .auto_track import AutomaticTracker
+from .speed_display import SpeedDisplay
 
 
 class RegionTracker:
@@ -89,7 +90,7 @@ class RegionTracker:
 
 
 class MotionAnalyzer:
-    def __init__(self, axis='horizontal', position=.65, rectangle=None, calibration=None, target_rectangle=None, tracking_mode='ivp', output_view='tracks', frame_interval=1/30):
+    def __init__(self, axis='horizontal', position=.65, rectangle=None, calibration=None, target_rectangle=None, tracking_mode='ivp', output_view='tracks', frame_interval=1/30, speed_display=None):
         if axis not in ('horizontal', 'vertical') or isinstance(position, bool) or not isinstance(position, (int, float)) or not math.isfinite(position) or not .1 <= position <= .9:
             raise ValueError('Counting line must be horizontal/vertical and between 10% and 90%.')
         rectangle = [0, 0, 1, 1] if rectangle is None else rectangle
@@ -100,16 +101,12 @@ class MotionAnalyzer:
         index = 1 if axis == 'horizontal' else 0
         if not rectangle[index] < position < rectangle[index+2]:
             raise ValueError('Place the counting line inside the selected road region.')
-        if tracking_mode not in ('ivp','vehicles') or output_view not in ('tracks','stages'):
-            raise ValueError('Choose IVP or vehicle tracking and a tracks or stages output view.')
+        if tracking_mode != 'ivp' or output_view not in ('tracks','stages'):
+            raise ValueError('Choose classical IVP tracking and a tracks or stages output view.')
         self.tracking_mode,self.output_view=tracking_mode,output_view
+        self.speed_display = SpeedDisplay(speed_display, calibration, tracking_mode) if speed_display is not None else None
         self.axis, self.position, self.rectangle = axis, position, rectangle
-        if tracking_mode=='vehicles':
-            from traffic_ai.vehicle_motion import VehicleTracker
-            self.tracker=VehicleTracker(axis,position,min_age=.3,frame_interval=frame_interval)
-            self.tracker.rectangle=rectangle
-        else:
-            self.tracker = AutomaticTracker(axis, position, min_age=.3,frame_interval=frame_interval)
+        self.tracker = AutomaticTracker(axis, position, min_age=.3,frame_interval=frame_interval)
         self.speed = SpeedEstimator(calibration,frame_interval=frame_interval)
         self.stabilizer = TranslationStabilizer(rectangle)
         self.target = SelectedTarget(target_rectangle,frame_interval=frame_interval) if target_rectangle is not None else None
@@ -134,7 +131,12 @@ class MotionAnalyzer:
         if scene_change:
             self.stabilizer = TranslationStabilizer(self.rectangle)
         rgb, registered = self.stabilizer.step(rgb)
+        # Neutral crossing occupancy needs an actual current registration result,
+        # not merely the absence of a legacy failure flag when no texture exists.
+        self.registration_observed = self.stabilizer.frames == 1 or registered
         h, w = rgb.shape[:2]
+        if self.speed_display:
+            self.speed_display.frame_size = [w, h]
         if self.heat is None:
             self.heat = np.zeros((h, w), np.float32)
         if self.heat.shape != (h, w):
@@ -200,7 +202,7 @@ class MotionAnalyzer:
                     else:
                         boxes.append((x, y, bw, bh))
         mask = keep[labels]
-        tracking_valid=valid or (self.tracking_mode=='vehicles' and not self.stabilizer.failed and not camera_change)
+        tracking_valid=valid
         if tracking_valid:
             self.tracker.valid_mask=self.stabilizer.valid_mask
             tracks, events = self.tracker.update(boxes, stamp, (h, w), gray, mask, rgb)
@@ -254,14 +256,18 @@ class MotionAnalyzer:
         else:
             a,b=(round(w*self.position),top),(round(w*self.position),bottom-1)
         cv2.line(annotated,a,b,(255,180,40),2)
+        display_note = (f" | display > {self.speed_display.config['limit']} {self.speed_display.config['unit']}"
+                        if self.speed_display and self.speed_display.config['enabled'] else '')
         for key,t in tracks:
+            if self.speed_display and not self.speed_display.observe(t, (h, w)):
+                continue  # Rendering only: tracks, speed history, events and exports are retained.
             x,y,bw,bh=map(int,t['box'])
             color=(30,220,220) if key=='SELECTED' else tuple(int(v) for v in cv2.cvtColor(np.uint8([[[(int(key)*37)%180,160,245]]]),cv2.COLOR_HSV2RGB)[0,0])
             cv2.rectangle(annotated,(x,y),(x+bw,y+bh),color,2)
-            label='SELECTED' if key=='SELECTED' else f"{'V' if self.tracking_mode=='vehicles' else 'M'}{key}"
+            label='SELECTED' if key=='SELECTED' else f"{'M'}{key}"
             if t.get('tracking_state')=='ambiguous overlap':label+=' ?'
             lines=[label]
-            if t.get('speed') is not None:lines.append(f"{t['speed']:.1f} {t['speed_unit']}")
+            if t.get('speed') is not None:lines.append(f"{t['speed']:.2f} {t['speed_unit']}" if self.speed_display and self.speed_display.config['enabled'] else f"{t['speed']:.1f} {t['speed_unit']}")
             tx=max(0,min(w-90,x));ty=max(15,y)
             for line in lines:
                 width=cv2.getTextSize(line,cv2.FONT_HERSHEY_SIMPLEX,.37,1)[0][0]
@@ -283,7 +289,7 @@ class MotionAnalyzer:
             heat=self.heatmap()
             mosaic=np.zeros_like(rgb)
             half_w,half_h=w//2,h//2
-            panels=[(rgb,'STABILIZED SOURCE'),(annotated,'TRACKS + SPEED'),
+            panels=[(rgb,'STABILIZED SOURCE'),(annotated,'TRACKS + SPEED'+display_note),
                     (cv2.cvtColor(mask,cv2.COLOR_GRAY2RGB),'CLEANED FOREGROUND'),(heat,'RELATIVE MOTION HEATMAP')]
             for idx,(pixels,title) in enumerate(panels):
                 x,y=(idx%2)*half_w,(idx//2)*half_h
@@ -293,7 +299,7 @@ class MotionAnalyzer:
                 cv2.putText(mosaic,title,(x+7,y+16),cv2.FONT_HERSHEY_SIMPLEX,font_scale,(235,242,242),1)
             total=sum(self.tracker.counts.values())
             cv2.rectangle(mosaic,(0,h-24),(w,h),(19,30,36),-1)
-            count_label='candidate crossings' if self.tracking_mode=='vehicles' else 'region crossings'
+            count_label='region crossings'
             cv2.putText(mosaic,f'{stamp:5.2f}s | {reason} | {count_label}: {total}',
                         (8,h-8),cv2.FONT_HERSHEY_SIMPLEX,.43,(240,240,240),1)
         if new_peak:
@@ -304,8 +310,10 @@ class MotionAnalyzer:
                        'background':background.copy() if background is not None else rgb.copy(),
                        'raw-foreground':raw.copy(),'shadows':((raw==127)*255).astype(np.uint8),'timestamp':stamp}
         cv2.rectangle(annotated,(0,h-25),(w,h),(19,30,36),-1)
-        mode_label='LOCAL VEHICLE DETECTOR + IVP' if self.tracking_mode=='vehicles' else 'AUTOMATIC IVP OBJECTS'
-        cv2.putText(annotated,f'{mode_label} | {stamp:.2f}s | {len(tracks)} tracks | speed: {self.speed.summary()["unit"]}',(8,h-8),cv2.FONT_HERSHEY_SIMPLEX,.44,(240,240,240),1)
+        mode_label='AUTOMATIC IVP OBJECTS'
+        footer=f'{mode_label} | {stamp:.2f}s | {len(tracks)} tracks | speed: {self.speed.summary()["unit"]}'+display_note
+        footer_scale=min(.44,(w-16)/max(1,cv2.getTextSize(footer,cv2.FONT_HERSHEY_SIMPLEX,1,1)[0][0])) if display_note else .44
+        cv2.putText(annotated,footer,(8,h-8),cv2.FONT_HERSHEY_SIMPLEX,footer_scale,(240,240,240),1)
         return annotated if self.output_view=='tracks' else mosaic, metrics, events, tracks
 
     def heatmap(self):
@@ -320,14 +328,15 @@ class MotionAnalyzer:
         return output
 
     def summary(self):
-        return {'method':('Local YOLO11s vehicle proposals + bottom-centre-aware ByteTrack with repeated-observation recovery + IVP camera registration, foreground, optical flow and timestamp speed' if self.tracking_mode=='vehicles' else 'MOG2 discovery + morphology + automatic Shi-Tomasi / forward-backward Lucas-Kanade texture tracking + conservative occlusion recovery + timestamp speed'),
+        return {'method':('MOG2 discovery + morphology + automatic Shi-Tomasi / forward-backward Lucas-Kanade texture tracking + conservative occlusion recovery + timestamp speed'),
+                **({'speed_display': self.speed_display.summary()} if self.speed_display else {}),
                 'speed':self.speed.summary(),
                 'tracking':self.tracker.summary(),
                 'selected_target':{**self.target.summary(),'speed':self.target_speed.summary()} if self.target else None,
                 'stabilization':self.stabilizer.summary(),
                 'optical_flow':{'measured_frames':self.flow_samples,'mean_frame_median_px_s':self.flow_sum/self.flow_samples if self.flow_samples else None,
                                 'meaning':'Moving foreground texture speed in analysis pixels/second; not vehicle speed.'},
-                'uses_ai':self.tracking_mode=='vehicles','output_view':self.output_view,'frames':self.frames,'suppressed_frames':self.suppressed,
+                'uses_ai':False,'output_view':self.output_view,'frames':self.frames,'suppressed_frames':self.suppressed,
                 'ambiguous_frames':self.ambiguous_frames,
                 'measured_seconds':self.valid_seconds,'crossings':self.tracker.counts,
                 'line':{'axis':self.axis,'position':self.position},'roi':self.rectangle,
@@ -343,12 +352,12 @@ class MotionAnalyzer:
                 'peak_activity_percent':max(0,self.peak_activity),
                 'peak_timestamp':self.peak['timestamp'] if self.peak else None,
                 'heatmap_max_seconds':float(self.heat.max()) if self.heat is not None else 0,
-                'limitations':[('Vehicle candidates come from the local detector; their identities and counts are not independently validated. Auto-rickshaw types are not classified.' if self.tracking_mode=='vehicles' else 'Counts refer to moving-region tracks, not independently validated vehicle counts.'),
-                ('Overlaps, small vehicles and changing viewpoints can cause missed detections and identity switches.' if self.tracking_mode=='vehicles' else 'Touching vehicles can merge; one object can split into multiple regions. Occlusion can change identities.'),
+                'limitations':[('Counts refer to moving-region tracks, not independently validated vehicle counts.'),
+                ('Touching vehicles can merge; one object can split into multiple regions. Occlusion can change identities.'),
                 'Requires a near-fixed camera. Uncertain camera registration and scene changes suppress tracking; widespread foreground suppresses foreground measurements.',
-                'Initial 0.7 seconds and resets warm up the background model. This excludes heatmap measurements but vehicle-mode detection can run during warm-up.',
+                'Initial 0.7 seconds and resets warm up the background model. Measurements are withheld during warm-up.',
                 'Speed is estimated from stable region trajectories; segmentation jitter and identity changes can cause error. It is not enforcement-grade.',
                 'km/h requires user-measured flat-road calibration. Outside that patch, speed is withheld. Without calibration only analysis pixels/second are reported.',
-                'A question mark marks overlapping vehicle hypotheses. Their speed and line crossings are withheld until the ambiguity clears; IDs are not automatically merged.',
+                'A question mark marks ambiguous region hypotheses. Their speed and line crossings are withheld until the ambiguity clears; IDs are not automatically merged.',
                 'Short-gap ID recovery requires new observed detections. A recovered weak track starts a fresh speed window and never supplies a line crossing across the gap.',
-                'No helmet status or violation decision is inferred. The IVP-only mode does not classify objects.']}
+                'Moving regions have no object class or traffic-rule meaning.']}

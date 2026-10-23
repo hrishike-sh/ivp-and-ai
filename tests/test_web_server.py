@@ -110,7 +110,7 @@ def test_motion_calibration_scoped_to_source(server, source, monkeypatch):
         assert error.value.code == 400
     assert not launched
     # Normalized calibration remains valid across tracking mode and ROI changes.
-    for mode in ('ivp', 'vehicles'):
+    for mode in ('ivp',):
         result = request(server, '/api/motion', {'media':media['id'], 'calibration':calibration,
                          'tracking_mode':mode, 'rectangle':[0,.2,1,1]})
         assert result['source'] == source.name
@@ -123,42 +123,75 @@ def test_motion_calibration_scoped_to_source(server, source, monkeypatch):
     assert error.value.code == 400
 
 
-def test_incident_api_validation_and_optional_default(server, source, monkeypatch):
-    from ivp.media import write_json
-    media=server.lab.register(source)
-    captured=[]
-    def start(path,info,settings,masks,motion):
-        captured.append(motion)
-        run=web_server.ROOT/'runs'/str(len(captured));run.mkdir(parents=True)
-        write_json(run/'request.json',{'source':str(path),'motion':motion})
-        write_json(run/'status.json',{'state':'cancelled'})
+def test_reopening_replaced_source_recomputes_automatic_ivp_profile(server, tmp_path):
+    path = tmp_path/'replaced.png'
+    Image.fromarray(np.full((48, 64, 3), 20, np.uint8)).save(path)
+    original = server.lab.register(path)
+    old_settings, old_profile = server.lab.resolve_settings({'media': original['id'], 'mode': 'automatic'})
+    assert old_settings.gamma == 1.5 and old_profile['measurements']['brightness'] == 20
+
+    Image.fromarray(np.full((72, 96, 3), 230, np.uint8)).save(path)
+    replacement = server.lab.register(path)
+    assert replacement['id'] == original['id']
+    assert replacement['source_revision'] != original['source_revision']
+    new_settings, new_profile = server.lab.resolve_settings({'media': replacement['id'], 'mode': 'automatic'})
+    assert new_settings.gamma == .85
+    assert new_profile['measurements']['brightness'] == 230
+    assert old_settings.gamma == 1.5  # Historical objects remain inspectable.
+    assert old_profile['measurements']['brightness'] == 20
+
+
+def test_unchanged_reopened_source_retains_fixed_automatic_profile(server, tmp_path, monkeypatch):
+    path = tmp_path/'unchanged.png'
+    Image.fromarray(np.full((48, 64, 3), 20, np.uint8)).save(path)
+    calls=[]
+    choose=web_server.choose_settings
+    def measured(rgb):
+        calls.append(1)
+        return choose(rgb)
+    monkeypatch.setattr(web_server,'choose_settings',measured)
+    media=server.lab.register(path)
+    first=server.lab.resolve_settings({'media':media['id'],'mode':'automatic'})
+    reopened=server.lab.register(path)
+    second=server.lab.resolve_settings({'media':reopened['id'],'mode':'automatic'})
+    assert calls == [1]
+    assert first == second and media['source_revision'] == reopened['source_revision']
+
+
+def test_replaced_source_preview_and_export_use_new_profile_keep_old_result(server, tmp_path, monkeypatch):
+    import hashlib
+    serial=[]
+    def fresh_run():
+        serial.append(1)
+        run=tmp_path/'runs'/f'reload-{len(serial)}'
+        run.mkdir(parents=True)
         return run
-    monkeypatch.setattr(web_server,'start_video',start)
-    base={'media':media['id'],'tracking_mode':'vehicles'}
-    config={'enabled':True,'line':[[.15,.65],[.85,.65]],'condition':'red','synthetic':True}
-    result=request(server,'/api/motion',{**base,'incidents':config})
-    assert result['report']['motion']['incidents']['synthetic'] is True
-    assert result['report']['motion']['incidents']['zone_role']=='observe'
-    assert result['downloads']==[]
-    for payload in ({**base,'incidents':{**config,'speed_limit_kmh':0}},
-                    {**base,'tracking_mode':'ivp','incidents':config}):
-        with pytest.raises(urllib.error.HTTPError) as error:request(server,'/api/motion',payload)
-        assert error.value.code==400
-    request(server,'/api/motion',base)
-    assert 'incidents' not in captured[-1]
+    monkeypatch.setattr(web_server,'new_run',fresh_run)
+    path=tmp_path/'reload.png'
+    Image.fromarray(np.full((48,64,3),20,np.uint8)).save(path)
+    media=server.lab.register(path)
+    payload={'media':media['id'],'mode':'automatic'}
+    before=request(server,'/api/preview',payload)
+    assert before['settings']['gamma']==1.5
+    old=request(server,'/api/export',payload)
+    original={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (tmp_path/'runs'/old['id']).iterdir() if p.is_file()}
+    Image.fromarray(np.full((72,96,3),230,np.uint8)).save(path)
+    server.lab.register(path)
+    after=request(server,'/api/preview',payload)
+    exported=request(server,'/api/export',payload)
+    assert after['settings']['gamma']==exported['report']['settings']['gamma']==.85
+    assert after['size']==exported['report']['processed_size']==[96,72]
+    assert exported['report']['processing_policy']['measurements']['brightness']==230
+    assert exported['report']['measurements']['original']['brightness']==230
+    assert np.array_equal(exported['report']['transform_to_source_pixel_centres'],np.eye(3))
+    old_again=request(server,'/api/run?id='+old['id'])
+    assert old_again['status']['state']=='complete' and old_again['preview']
+    assert old_again['report']['settings']['gamma']==1.5
+    assert original=={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (tmp_path/'runs'/old['id']).iterdir() if p.is_file()}
 
 
-def test_incident_thumbnails_are_scoped_to_completed_run(server,tmp_path):
-    from ivp.media import write_json
-    run=tmp_path/'runs'/'incident-result';run.mkdir(parents=True)
-    (run/'incident-000001.png').write_bytes(b'fixture')
-    events=[{'thumbnail':'incident-000001.png'},{'thumbnail':'../private.png'}]
-    write_json(run/'report.json',{'source':'fixture.mp4','motion':{'incidents':{'events':events}}})
-    write_json(run/'status.json',{'state':'cancelled'})
-    assert 'thumbnail_url' not in server.lab.run(run.name)['report']['motion']['incidents']['events'][0]
-    write_json(run/'status.json',{'state':'complete'})
-    result=server.lab.run(run.name)['report']['motion']['incidents']['events']
-    assert result[0]['thumbnail_url'] and 'thumbnail_url' not in result[1]
+
+
 
 
 def test_early_rejections_deliver_json_without_resetting_windows_socket(server):
@@ -229,6 +262,7 @@ def test_interrupted_and_corrupt_video_uploads_allow_a_clean_retry(server, sourc
 
 
 def test_terminated_worker_recovers_status_and_retries_in_a_new_run(server, source, monkeypatch):
+    import os
     import subprocess
     import sys
     import time
@@ -245,21 +279,24 @@ def test_terminated_worker_recovers_status_and_retries_in_a_new_run(server, sour
     original_hash = hashlib.sha256(source.read_bytes()).hexdigest()
     stopped = request_run(isolated_runs, source)
     child_code = '''
-import sys,time
+import os,sys,time
 from pathlib import Path
 from ivp import jobs
+from ivp.media import write_json
 from ivp.worker import process_video
 jobs.RUNS=Path(sys.argv[2])
 run=Path(sys.argv[1])
 def gate(result,rgb,index,distance):
     if index==5:
-        (run/'termination-ready').write_text('paused after encoder initialization and five processed frames')
+        write_json(run/'termination-ready',{'pid':os.getpid(),'checkpoint':'encoder initialized; five frames processed'})
         while True:time.sleep(.1)
     return result.color_rgb
 with jobs.job_lock():
     process_video(run,frame_hook=gate if sys.argv[3]=='pause' else None)
 '''
     command = [sys.executable,'-c',child_code,str(stopped),str(isolated_runs),'pause']
+    worker_handle = None
+    lifecycle = []
     with (stopped/'worker.log').open('wb') as log:
         child = subprocess.Popen(command, stdout=log, stderr=log, **hidden_process_options())
         try:
@@ -268,15 +305,49 @@ with jobs.job_lock():
                 assert child.poll() is None, (stopped/'worker.log').read_text()
                 assert time.monotonic()<deadline, 'Worker did not reach encoding checkpoint'
                 time.sleep(.05)
+            worker_pid = json.loads((stopped/'termination-ready').read_text())['pid']
+            lifecycle.append({'event':'worker_ready','at_ns':time.perf_counter_ns(),
+                              'launcher_pid':child.pid,'worker_pid':worker_pid})
+            if os.name == 'nt':
+                import ctypes
+                from ctypes import wintypes
+                kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+                kernel.OpenProcess.argtypes = (wintypes.DWORD,wintypes.BOOL,wintypes.DWORD)
+                kernel.OpenProcess.restype = wintypes.HANDLE
+                kernel.WaitForSingleObject.argtypes = (wintypes.HANDLE,wintypes.DWORD)
+                kernel.WaitForSingleObject.restype = wintypes.DWORD
+                kernel.TerminateProcess.argtypes = (wintypes.HANDLE,wintypes.UINT)
+                kernel.TerminateProcess.restype = wintypes.BOOL
+                kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+                kernel.CloseHandle.restype = wintypes.BOOL
+                # Pin this owned process while it is alive, before terminating
+                # its venv launcher. Waiting for the launcher alone can return
+                # before the actual interpreter exits and releases its lock.
+                worker_handle = kernel.OpenProcess(0x100001,False,worker_pid)
+                assert worker_handle, ctypes.get_last_error()
+                assert kernel.WaitForSingleObject(worker_handle,0) == 258
             with pytest.raises(RuntimeError, match='Another video job'):
                 with jobs.job_lock():
                     pass
             assert jobs.read_status(stopped)['state'] == 'running'
             child.terminate()  # Only this test's owned child; no app PID lookup.
             child.wait(timeout=10)
+            lifecycle.append({'event':'launcher_wait_returned','at_ns':time.perf_counter_ns()})
+            if worker_handle:
+                assert kernel.WaitForSingleObject(worker_handle,10000) == 0, 'Owned worker has not exited.'
+            lifecycle.append({'event':'worker_exit_observed','at_ns':time.perf_counter_ns()})
+            with jobs.job_lock():
+                lifecycle.append({'event':'lock_reacquired','at_ns':time.perf_counter_ns()})
         finally:
             if child.poll() is None:
                 child.kill(); child.wait(timeout=10)
+            if worker_handle:
+                try:
+                    if kernel.WaitForSingleObject(worker_handle,0) != 0:
+                        assert kernel.TerminateProcess(worker_handle,1)
+                        assert kernel.WaitForSingleObject(worker_handle,5000) == 0
+                finally:
+                    kernel.CloseHandle(worker_handle)
     assert child.returncode != 0
     # libx264 can buffer every packet of a short clip until encoder flush;
     # a killed process need not have created the partial MP4 yet.
@@ -316,6 +387,7 @@ with jobs.job_lock():
     write_json(web_server.ROOT/'termination-validation.json', {
         'checked_at_utc':jobs.now(),'terminated_owned_pid':child.pid,'returncode':child.returncode,
         'interrupted_run':str(stopped),'retry_run':str(retry),'diagnostic_sha256':diagnostics,
+        'worker_pid':worker_pid,'lifecycle':lifecycle,'actual_worker_exit_observed':True,
         'retry_served_bytes_match':True,'retry_audio_and_timestamps_preserved':True,
         'original_source_unchanged':True,'grace_period':'Clock advanced 40 seconds in parent test only; process termination and file locking are real.',
         'scope':'Isolated local test server and owned worker processes; no live demo process or run modified.'})

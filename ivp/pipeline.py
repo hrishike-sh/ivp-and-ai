@@ -3,6 +3,9 @@ from dataclasses import asdict, dataclass, field
 import cv2
 import numpy as np
 
+from .paint import paint_support
+from .marking_policy import review_only_policy
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -162,19 +165,19 @@ def extract_features(rgb, original_rgb, settings):
     for x1, y1, x2, y2 in line_list:
         cv2.line(line_view, (x1, y1), (x2, y2), (56, 189, 248), 2)
     road = rgb.copy()
+    paint = paint_support(original_rgb)
     stripe_mask = np.zeros_like(gray)
-    white_contours, _ = cv2.findContours(cleanup(white, settings), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    paint_contours, _ = cv2.findContours(paint.mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     stripe_boxes = []
-    for contour in white_contours:
+    for contour in paint_contours:
         area = cv2.contourArea(contour)
         x, y, w, ht = cv2.boundingRect(contour)
-        if (area >= max(40, gray.size * 0.00025) and w >= max(12, gray.shape[1] * 0.04)
-                and w / max(ht, 1) >= 1.6 and area / (w * ht) >= 0.4
+        if (area >= max(40, gray.size * 0.00025) and max(w, ht) >= 12
                 and y + ht > gray.shape[0] * 0.45):
             stripe_boxes.append([x, y, w, ht])
-            cv2.drawContours(stripe_mask, [contour], -1, 255, -1)
+            stripe_mask[y:y+ht, x:x+w] |= paint.mask[y:y+ht, x:x+w]
             cv2.rectangle(road, (x, y), (x + w, y + ht), (255, 185, 65), 2)
-    road_edges = cv2.Canny(cleanup(white, settings), settings.canny_low, settings.canny_high)
+    road_edges = cv2.Canny(stripe_mask, settings.canny_low, settings.canny_high)
     road_lines = cv2.HoughLinesP(road_edges, 1, np.pi / 180, 40,
                                 minLineLength=max(settings.line_length, round(gray.shape[1] * 0.12)), maxLineGap=15)
     candidates = [] if road_lines is None else road_lines[:, 0].tolist()
@@ -195,12 +198,17 @@ def extract_features(rgb, original_rgb, settings):
         "White marking mask": cleanup(white, settings), "Edges": edges,
         "Threshold": binary, "Morphology": cleaned, "Contours": contour_view,
         "Lines": line_view, "Road candidates": road, "Stripe mask": stripe_mask,
+        "Paint background": paint.background, "Paint local contrast": paint.contrast,
+        "Paint candidate mask": paint.mask,
+        "Paint colour seed": paint.raw, "Paint shape proposals": paint.shape_mask,
+        "Paint unbracketed proposals": paint.uncertain,
         "Sobel magnitude": gradient,
         "Laplacian": cv2.convertScaleAbs(cv2.Laplacian(gray, cv2.CV_32F)),
         "Morphological gradient": cv2.morphologyEx(gray, cv2.MORPH_GRADIENT, morph_kernel),
         "Top hat": cv2.morphologyEx(gray, cv2.MORPH_TOPHAT, morph_kernel),
         "Black hat": cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, morph_kernel),
-    }, {"stripe_boxes": stripe_boxes, "horizontal_segments": horizontal,
+    }, {**review_only_policy(), "stripe_boxes": stripe_boxes, "horizontal_segments": horizontal,
+        "paint_support": {"parameters": paint.parameters, "counts": paint.counts},
         "line_count": len(line_list), "contour_count": len(contours),
         "warning": "Appearance candidates only. No crossing, stop-line, signal, or violation classification."}
 

@@ -254,7 +254,7 @@ def test_server_exit_during_startup_removes_its_pid_without_signalling_it(launch
 
 def test_busy_startup_lock_times_out_and_releases_afterward(launcher):
     with launch.startup_lock():
-        with pytest.raises(SystemExit, match="Another Traffic Lab launcher"):
+        with pytest.raises(SystemExit, match="Another IVP Lab launcher"):
             with launch.startup_lock(timeout=0):
                 pytest.fail("The second launcher must not enter while startup is locked")
     with launch.startup_lock(timeout=0):
@@ -269,7 +269,7 @@ def test_startup_lock_excludes_another_process(launcher):
                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
     try:
         assert process.stdout.readline().strip() == "ready"
-        with pytest.raises(SystemExit, match="Another Traffic Lab launcher"):
+        with pytest.raises(SystemExit, match="Another IVP Lab launcher"):
             with launch.startup_lock(timeout=0):
                 pytest.fail("A second process must not enter startup")
     finally:

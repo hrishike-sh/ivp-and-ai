@@ -89,13 +89,10 @@ def fail_pid_publication(monkeypatch, error):
 
 
 @pytest.mark.parametrize("mode,module", [
-    ("ivp", "ivp.worker"), ("ai", "traffic_ai.worker"), ("motion", "ivp.motion_worker"),
+    ("ivp", "ivp.worker"), ("motion", "ivp.motion_worker"),
 ])
 def test_pid_publication_failure_reaps_worker_and_allows_immediate_retry(worker_launch, monkeypatch, mode, module):
-    from traffic_ai import runtime
-
-    monkeypatch.setattr(runtime, "python_path", lambda: Path(sys.executable))
-    options = {"ai": True} if mode == "ai" else {"motion": {"tracking_mode": "ivp"}} if mode == "motion" else {}
+    options = {"motion": {"tracking_mode": "ivp"}} if mode == "motion" else {}
     original_new_run = jobs.new_run
 
     def blocked_pid_path():
@@ -120,7 +117,7 @@ def test_pid_publication_failure_reaps_worker_and_allows_immediate_retry(worker_
     assert str(error.value.__cause__) in status["message"]
     request = json.loads((run / "request.json").read_text())
     assert request["source"] == str(worker_launch.source.resolve())
-    assert request["ai"] == (mode == "ai")
+    assert "ai" not in request
     assert request["motion"] == options.get("motion")
     assert (run / "worker.log").read_text().strip() == "Waiting for launch metadata"
     assert (run / "process.json").is_dir()

@@ -9,47 +9,25 @@ import re
 import secrets
 import threading
 import zipfile
-from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from ivp.downloads import FileServer
 from ivp.inspection import inspect_region
-from ivp.jobs import ROOT, cancel_job, history, job_lock, new_run, now, refreshed_status, start_video
+from ivp.jobs import ROOT, cancel_job, history, new_run, now, refreshed_status, start_video
 from ivp.media import load_image, png_bytes, preview_frame, probe_video, write_json, source_revision
 from ivp.pipeline import PRESETS, Settings, histogram, process_frame
 from ivp.workspace import run_details, source_name
 from ivp.automatic import choose_settings
 from ivp.stages import build_stages, manifest
 from ivp.survey import survey
+from ivp.library import RunLibrary
+from ivp.marking_policy import mask_export_manifest, review_only_policy
 
 WEB = ROOT / "web"
 EXTENSIONS = {".jpg", ".jpeg", ".png", ".mp4", ".mov", ".avi"}
-SAMPLE_NAMES = {"indian_riders.png": "Indian motorcycles", "indian_night.png": "Indian night traffic",
-                'indian-motion.mp4': 'Indian traffic · crowded stress test', 'traffic-motion.avi': 'Pedestrian movement · OpenCV sample',
-                'india-city.mp4': 'Indian city traffic - recommended automatic tracking demo',
-                'india-delhi-overhead.mp4': 'Delhi junction - crowded autos, buses & bikes',
-                'india-intersection.mp4': 'Delhi intersection - mixed street traffic', 'india-rickshaws.mp4': 'Delhi street - rickshaws & close occlusion',
-                'highway-motion.mp4': 'Highway traffic · fixed camera demo',
-                "street.jpg": "Street scene", "low_light.png": "Low light · simulated", "noisy.png": "Sensor noise · simulated",
-                "crossing.jpg": "Zebra crossing", "sample_video.mp4": "Video · still image + test audio"}
-DOWNLOADS = {"processed.png": "Processed image", "processed.mp4": "Processed video", "detections.png": "Detected objects",
-             'motion-incidents.jsonl': 'Incident assessments (JSONL)', 'motion-incidents.csv': 'Incident assessments (CSV)',
-             'motion-incidents.json': 'Incident review summary and configuration',
-             'motion-tracks.png': 'Full-resolution tracks and speed', 'motion-flow.png': 'Local optical-flow arrows',
-             'motion-evidence.zip': 'Motion analysis evidence package', 'motion-heatmap.png': 'Movement heatmap',
-             'motion-mosaic.png': 'Peak activity comparison', 'motion-activity.csv': 'Motion timeline (CSV)',
-             'motion-crossings.csv': 'Line crossings (CSV)', 'motion-tracks.csv': 'Track trajectories (CSV)',
-             'motion-background.png': 'Estimated background', 'motion-raw-foreground.png': 'Raw foreground labels',
-             'motion-shadows.png': 'Rejected shadow mask', 'motion-mask.png': 'Cleaned foreground mask',
-             'survey-evidence.zip': 'Survey images and masks', 'fragments.csv': 'Fragment measurements (CSV)',
-             'annotated-survey.png': 'Annotated marking survey',
-             'processing-policy.json': 'Automatic processing policy',
-             "ivp-stages.zip": "All IVP stages + explanations",
-             "report.json": "Settings & measurements", "masks.zip": "Feature masks", "measurements.csv": "Frame measurements",
-             "scene_changes.csv": "Scene changes", "coordinates.json": "Coordinate mapping", "events.jsonl": "AI events",
-             "detections.jsonl": "AI frame decisions", "evidence.zip": "Event evidence", "scene_features.zip": "Scene features"}
+DOWNLOADS = {'processed.png': 'Processed image', 'processed.mp4': 'Processed video', 'motion-tracks.png': 'Full-resolution tracks and speed', 'motion-flow.png': 'Local optical-flow arrows', 'motion-evidence.zip': 'Motion analysis evidence package', 'motion-heatmap.png': 'Movement heatmap', 'motion-mosaic.png': 'Peak activity comparison', 'motion-activity.csv': 'Motion timeline (CSV)', 'motion-crossings.csv': 'Line crossings (CSV)', 'motion-tracks.csv': 'Track trajectories (CSV)', 'motion-background.png': 'Estimated background', 'motion-raw-foreground.png': 'Raw foreground labels', 'motion-shadows.png': 'Rejected shadow mask', 'motion-mask.png': 'Cleaned foreground mask', 'survey-evidence.zip': 'Survey images and masks', 'fragments.csv': 'Fragment measurements (CSV)', 'annotated-survey.png': 'Annotated marking survey', 'processing-policy.json': 'Automatic processing policy', 'ivp-stages.zip': 'All IVP stages + explanations', 'report.json': 'Settings & measurements', 'masks.zip': 'Feature masks', 'measurements.csv': 'Frame measurements', 'scene_changes.csv': 'Scene changes', 'coordinates.json': 'Coordinate mapping'}
 
 
 def parse_settings(value):
@@ -73,6 +51,48 @@ def parse_settings(value):
     return settings
 
 
+def save_demo_assets(run, document, assets, binding):
+    """Publish newly captured arrays in this run; never upgrade legacy runs."""
+    folder = run / 'executed-ivp'
+    folder.mkdir()
+    document['source_binding'] = binding
+    document['assets'] = {}
+    for key, pixels in assets.items():
+        if not re.fullmatch(r'[a-z0-9_-]{1,40}', key):
+            raise ValueError('Invalid captured stage identifier.')
+        encoded = png_bytes(pixels)
+        (folder / (key + '.png')).write_bytes(encoded)
+        document['assets'][key] = {'sha256': hashlib.sha256(encoded).hexdigest()}
+
+
+def demo_view(run, report, files):
+    document = report.get('ivp_demo')
+    if (not isinstance(document, dict) or document.get('schema_version') != 1 or
+            document.get('source_binding') != report.get('source_binding') or
+            not report.get('source_binding')):
+        return None
+    assets, steps = document.get('assets'), document.get('steps')
+    if not isinstance(assets, dict) or not 1 <= len(assets) <= 40 or not isinstance(steps, list) or len(steps) > 32:
+        return None
+    urls = {}
+    for key, details in assets.items():
+        if not isinstance(key, str) or not re.fullmatch(r'[a-z0-9_-]{1,40}', key) or not isinstance(details, dict):
+            return None
+        path = run / 'executed-ivp' / (key + '.png')
+        if not path.resolve().is_relative_to(run.resolve()) or not path.is_file():
+            return None
+        if hashlib.sha256(path.read_bytes()).hexdigest() != details.get('sha256'):
+            return None
+        urls[key] = files.url(path)
+    if any(not isinstance(s, dict) or not isinstance(s.get('before'), str) or not isinstance(s.get('after'), str)
+           or s['before'] not in urls or s['after'] not in urls for s in steps):
+        return None
+    if not all(isinstance(document.get(key), str) and document[key] in urls for key in ('original', 'final')):
+        return None
+    return {**document, 'urls': urls,
+            'result_download': files.url(run / 'executed-ivp' / (document['final'] + '.png'), True)}
+
+
 class Lab:
     def __init__(self):
         self.files = FileServer()
@@ -80,30 +100,34 @@ class Lab:
         self.lock = threading.Lock()
         self.cache = None
         self.auto_profiles = {}
+        self.library = RunLibrary(ROOT/'runs')
 
-        self.executor = ThreadPoolExecutor(max_workers=1)
-        self.review_future = None
-        self.review_id = None
         self.token = secrets.token_urlsafe(32)
 
     def close(self):
         self.files.close()
-        self.executor.shutdown(wait=False, cancel_futures=True)
 
     def register(self, path):
         path = Path(path)
+        revision = source_revision(path)
         info = probe_video(path) if path.suffix.lower() in (".mp4", ".mov", ".avi") else None
         if info is None:
             rgb = load_image(path)
             info = {"kind": "image", "width": rgb.shape[1], "height": rgb.shape[0]}
         key = hashlib.sha256(str(path.resolve()).encode()).hexdigest()[:24]
-        info['source_revision'] = source_revision(path)
+        info['source_revision'] = revision
+        self._check_source(path, info)
+        self._check_source(path, info)
         registry = ROOT / "temp" / "webmedia"
         registry.mkdir(parents=True, exist_ok=True)
         write_json(registry / (key + ".json"), {"path": str(path.resolve())})
+        previous = self.media.get(key)
+        if previous is None or previous[1].get('source_revision') != info['source_revision']:
+            self.auto_profiles.pop(key, None)
         self.media[key] = (path, info)
         self.cache = None
-        return {"id": key, "name": path.name, "size_bytes": path.stat().st_size, **info}
+        return {"id": key, "name": path.name, "size_bytes": path.stat().st_size, **info,
+                **({'original_video': self.files.url(path)} if info['kind'] == 'video' else {})}
 
     def resume(self, key):
         if not isinstance(key, str) or len(key) != 24 or any(c not in '0123456789abcdef' for c in key):
@@ -111,7 +135,7 @@ class Lab:
         record = ROOT / "temp" / "webmedia" / (key + ".json")
         try:
             path = Path(json.loads(record.read_text())["path"]).resolve()
-            if not any(path.is_relative_to((ROOT / folder).resolve()) for folder in ("uploads", "demo")):
+            if not any(path.is_relative_to((ROOT / folder).resolve()) for folder in ("uploads",)):
                 raise ValueError("Saved source is outside the media folders.")
             if hashlib.sha256(str(path).encode()).hexdigest()[:24] != key:
                 raise ValueError("Saved source identity changed.")
@@ -119,10 +143,32 @@ class Lab:
         except (OSError, KeyError, TypeError) as exc:
             raise ValueError("Previous footage is unavailable; choose a file again.") from exc
 
-    def frame(self, data):
+    @staticmethod
+    def _check_source(path, info):
+        # Real registrations always record a revision. Older direct frame
+        # providers may omit it; do not invent a content-digest requirement.
+        expected = info.get('source_revision')
+        if expected is None:
+            return
+        try:
+            current = source_revision(path)
+        except OSError as exc:
+            raise ValueError('Source is no longer available. Reopen the footage before continuing.') from exc
+        if current != expected:
+            raise ValueError('The source changed since it was opened. Reopen the footage before continuing.')
+
+    def _source(self, data):
         if data.get("media") not in self.media:
-            raise ValueError("Choose a sample or upload your footage again.")
+            raise ValueError("Upload your footage again.")
         path, info = self.media[data["media"]]
+        requested = data.get('source_revision')
+        if requested is not None and requested != info.get('source_revision'):
+            raise ValueError('The source changed since it was opened. Reopen the footage before continuing.')
+        self._check_source(path, info)
+        return path, info
+
+    def frame(self, data):
+        path, info = self._source(data)
         stamp = data.get("timestamp", 0)
         if isinstance(stamp, bool) or not isinstance(stamp, (int, float)) or not math.isfinite(stamp) or stamp < 0:
             raise ValueError("Invalid frame timestamp.")
@@ -131,15 +177,19 @@ class Lab:
             rgb, stamp = preview_frame(path, info, stamp)
         else:
             rgb, stamp = load_image(path), 0.
+        self._check_source(path, info)
         return path, info, rgb, stamp
 
     def processed(self, data):
+        path, info = self._source(data)
         settings, _ = self.resolve_settings(data)
+        self._check_source(path, info)
         key = (data.get("media"), data.get("timestamp", 0), settings)
         if self.cache and self.cache[0] == key:
             return self.cache[1]
         path, info, rgb, stamp = self.frame(data)
         result = process_frame(rgb, settings, stamp)
+        self._check_source(path, info)
         value = path, info, result, settings
         self.cache = key, value
         return value
@@ -153,9 +203,11 @@ class Lab:
         key = data.get('media')
         if key not in self.media:
             raise ValueError('Choose footage first.')
+        path, info = self._source(data)
         if key not in self.auto_profiles:
             _, info, rgb, stamp = self.frame({**data, 'timestamp': 0})
             settings, explanation = choose_settings(rgb)
+            self._check_source(path, info)
             self.auto_profiles[key] = settings, {**explanation, 'mode': 'automatic',
                 'reference_timestamp': stamp,
                 'scope': 'Fixed settings from the first frame for the whole video.' if info['kind'] == 'video' else 'Settings selected from this image.'}
@@ -190,16 +242,32 @@ class Lab:
         # Always measure original colour at a fixed resolution; enhancement
         # sliders must not manufacture paint coverage or change its geometry.
         path, info, rgb, stamp = self.frame(data)
+        revision = info['source_revision']
+        if revision != source_revision(path):
+            raise ValueError('The source changed since it was opened. Reopen it before measuring markings.')
         settings = Settings(max_width=1280)
         prepared = process_frame(rgb, settings, stamp)
-        report, images = survey(prepared.stages['Prepared'], data.get('rectangle'), prepared.transform_to_source)
+        capture = data.get('capture_presentation', False)
+        if type(capture) is not bool:
+            raise ValueError('Invalid stage capture option.')
+        report, images = survey(prepared.stages['Prepared'], data.get('rectangle'), prepared.transform_to_source,
+                                **({'capture_stages': True} if capture else {}))
         report.update({'source': path.name, 'kind': 'ivp_marking_survey', 'timestamp_seconds': stamp,
                        'created_at': now(), 'source_size': prepared.source_size,
+                       'source_binding': {'media_id': data['media'], 'source_revision': revision,
+                           'timestamp_seconds': stamp, 'coordinate_space': 'display-oriented analysis pixel centres',
+                           'transform_to_source_pixel_centres': prepared.transform_to_source.tolist()},
                        'settings': settings.to_dict()})
+        if revision != source_revision(path):
+            raise ValueError('The source changed during the survey. Reopen it and try again.')
         run = new_run()
+        if capture:
+            save_demo_assets(run, report['ivp_demo'],
+                             {key: images['executed-' + key] for key in report['ivp_demo']['asset_keys']}, report['source_binding'])
         write_json(run / 'report.json', report)
         (run / 'annotated-survey.png').write_bytes(png_bytes(images['annotated-survey']))
-        fields = ['id', 'area_px', 'bbox_x', 'bbox_y', 'bbox_width_px', 'bbox_height_px',
+        fields = ['id', 'status', 'semantic_class', 'eligible_for_geometry', 'eligible_for_rules', 'reason',
+                  'area_px', 'bbox_x', 'bbox_y', 'bbox_width_px', 'bbox_height_px',
                   'long_side_px', 'short_side_px', 'orientation_deg_clockwise_from_right',
                   'touches_roi_boundary', 'source_centre_x', 'source_centre_y']
         with (run / 'fragments.csv').open('w', newline='', encoding='utf-8') as handle:
@@ -216,31 +284,60 @@ class Lab:
         return self.run(run.name)
 
     def export(self, data):
+        goal = data.get('ivp_goal')
+        if goal is not None and goal not in ('colour', 'regions', 'edges'):
+            raise ValueError('Choose a colour image, region map or edge map.')
         path, info, result, settings = self.processed(data)
+        policy = self.resolve_settings(data)[1]
         masks = data.get("masks", [])
         if not isinstance(masks, list) or any(name not in result.features for name in masks):
             raise ValueError("Unknown feature mask.")
+        self._check_source(path, info)
+        binding = {'media_id': data['media'], 'source_name': path.name,
+                   'source_revision': info.get('source_revision') or source_revision(path),
+                   'timestamp_seconds': result.timestamp,
+                   'transform_to_source_pixel_centres': result.transform_to_source.tolist()}
         run = new_run()
         (run / "processed.png").write_bytes(png_bytes(result.color_rgb))
         with zipfile.ZipFile(run / "masks.zip", "w", zipfile.ZIP_DEFLATED) as archive:
             for name in masks:
                 archive.writestr(name.replace(" ", "_") + ".png", png_bytes(result.features[name]))
+            archive.writestr('manifest.json', json.dumps(mask_export_manifest(masks, binding), indent=2))
         graph = build_stages(result, settings)
+        demonstration = None
+        if goal is not None:
+            from ivp.presentation import image_presentation
+            demonstration, captured = image_presentation(result, settings, graph, goal)
+            save_demo_assets(run, demonstration, captured, binding)
         with zipfile.ZipFile(run / 'ivp-stages.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
             for i, step in enumerate(graph):
                 archive.writestr(f"{i+1:02d}-{step['id']}.png", png_bytes(step['image']))
             archive.writestr('stages.json', json.dumps(manifest(graph), indent=2))
+            if demonstration:
+                archive.writestr('executed-steps.json', json.dumps(demonstration, indent=2))
+                for key in demonstration['asset_keys']:
+                    archive.write(run / 'executed-ivp' / (key + '.png'), 'executed/' + key + '.png')
             archive.writestr('processing.json', json.dumps({'source': path.name,
+                'source_binding': binding,
                 'timestamp': result.timestamp, 'settings': settings.to_dict(),
-                'policy': self.resolve_settings(data)[1],
+                'policy': policy,
+                'marking_policy': review_only_policy(),
                 'transform_to_source_pixel_centres': result.transform_to_source.tolist()}, indent=2))
         write_json(run / "report.json", {"schema_version": 1, "source": path.name,
+                   'source_binding': binding,
                    "kind": "video_frame" if info["kind"] == "video" else "image", "created_at": now(),
                    "timestamp_seconds": result.timestamp, "settings": settings.to_dict(),
                    "measurements": result.measurements, "candidates": result.candidates,
-                   'ivp_stages': manifest(graph), 'processing_policy': self.resolve_settings(data)[1],
+                   **({'ivp_demo': demonstration} if demonstration else {}),
+                   'ivp_stages': manifest(graph), 'processing_policy': policy,
                    "source_size": result.source_size, "processed_size": [result.color_rgb.shape[1], result.color_rgb.shape[0]],
                    "transform_to_source_pixel_centres": result.transform_to_source.tolist(), "selected_masks": masks})
+        try:
+            self._check_source(path, info)
+        except ValueError as exc:
+            write_json(run / 'status.json', {'state': 'failed', 'progress': 0,
+                       'message': str(exc), 'updated_at': now()})
+            raise
         write_json(run / "status.json", {"state": "complete", "progress": 1, "message": "Image export ready.", "updated_at": now()})
         return self.run(run.name)
 
@@ -257,26 +354,21 @@ class Lab:
             links = []
         preview = None
         if status.get("state") == "complete":
-            incident_summary = details.get('motion',{}).get('incidents',{})
-            for event in incident_summary.get('events',[]):
-                thumbnail = event.get('thumbnail')
-                if (isinstance(thumbnail,str) and re.fullmatch(r'incident-\d{6}\.png',thumbnail)
-                        and (run/thumbnail).is_file()):
-                    event['thumbnail_url'] = self.files.url(run/thumbnail)
-            for file in ("processed.mp4", "detections.png", "processed.png", "annotated-survey.png"):
+            for file in ("processed.mp4", "processed.png", "annotated-survey.png"):
                 if (run / file).exists():
                     preview = {"url": self.files.url(run / file), "video": file.endswith(".mp4"), "name": file}
                     break
-        return {"id": name, "source": source_name(details), "status": status, "downloads": links, "preview": preview, "report": details}
+        return {"id": name, "source": source_name(details), "status": status, "downloads": links, "preview": preview, "report": details,
+                **({'demonstration': demo_view(run, details, self.files)} if status.get('state') == 'complete' and 'ivp_demo' in details else {})}
 
     def post(self, route, data):
         if route == '/api/motion':
             from ivp.motion import MotionAnalyzer
             if data.get('media') not in self.media:
                 raise ValueError('Choose a traffic video first.')
-            path, info = self.media[data['media']]
+            path, info = self._source(data)
             if info['kind'] != 'video':
-                raise ValueError('Motion analysis needs a video. Choose the Indian traffic moving-video sample.')
+                raise ValueError('Motion analysis needs a video. Upload a video first.')
             if info.get('source_revision') != source_revision(path):
                 raise ValueError('This video changed since it was opened. Reopen it and mark the road calibration again.')
             calibration = data.get('calibration')
@@ -290,23 +382,16 @@ class Lab:
                       'rectangle': data.get('rectangle'), 'calibration': data.get('calibration'),
                       'target_rectangle':data.get('target_rectangle'), 'tracking_mode':data.get('tracking_mode','ivp'),
                       'output_view':data.get('output_view','tracks')}
+            if 'speed_display' in data:
+                from ivp.speed_display import validate_speed_display
+                config['speed_display'] = validate_speed_display(data['speed_display'], calibration)
             MotionAnalyzer(**config)
-            from ivp.incidents import validate_config
-            incidents = validate_config(data.get('incidents'))
-            if incidents and incidents['enabled']:
-                if config['tracking_mode'] != 'vehicles':
-                    raise ValueError('Incident review needs automatic vehicle tracking. Select Vehicles · local detector + IVP.')
-                config['incidents'] = incidents
+            self._check_source(path, info)
             return self.run(start_video(path,info,Settings(max_width=960),[],motion=config).name)
         if route == '/api/survey':
             return self.marking_survey(data)
         if route == "/api/validate-settings":
             return parse_settings(data.get("settings", {})).to_dict()
-        if route == "/api/sample":
-            name = data.get("name")
-            if name not in SAMPLE_NAMES or not (ROOT / "demo" / name).is_file():
-                raise ValueError("Sample not found.")
-            return self.register(ROOT / "demo" / name)
         if route == "/api/preview":
             return self.preview(data)
         if route == "/api/region":
@@ -317,9 +402,8 @@ class Lab:
             # Validate without running expensive IVP before starting the worker.
             if data.get("media") not in self.media:
                 raise ValueError("Choose footage first.")
-            path, info = self.media[data["media"]]
-            ai = data.get("ai", False)
-            if type(ai) is not bool or (not ai and info["kind"] != "video"):
+            path, info = self._source(data)
+            if data.get("ai") or info["kind"] != "video":
                 raise ValueError("Use image export for still images.")
             settings, policy = self.resolve_settings(data)
             masks = data.get("masks", [])
@@ -328,7 +412,8 @@ class Lab:
             allowed_masks = {"Grayscale", "Hue", "Saturation", "Value", "Colour mask", "White marking mask", "Edges", "Threshold", "Morphology", "Contours", "Lines", "Road candidates", "Stripe mask", "Sobel magnitude", "Laplacian", "Morphological gradient", "Top hat", "Black hat"}
             if any(v not in allowed_masks for v in masks):
                 raise ValueError("Unknown feature mask.")
-            run = start_video(path, info, settings, masks, ai=ai)
+            self._check_source(path, info)
+            run = start_video(path, info, settings, masks)
             write_json(run / 'processing-policy.json', policy)
             return self.run(run.name)
         if route == "/api/cancel":
@@ -336,17 +421,6 @@ class Lab:
             if run["status"]["state"] in ("queued", "running", "encoding"):
                 cancel_job(ROOT / "runs" / run["id"])
             return {"message": "Cancellation requested."}
-        if route == "/api/review":
-            if self.review_future and not self.review_future.done():
-                raise RuntimeError("A scene review is already running.")
-            _, _, rgb, stamp = self.frame(data)
-            def review():
-                from traffic_ai.local_vision import review_frame
-                with job_lock():
-                    return review_frame(rgb, stamp)
-            self.review_id = secrets.token_hex(12)
-            self.review_future = self.executor.submit(review)
-            return {"id": self.review_id, "state": "running"}
         raise ValueError("Unknown operation.")
 
 
@@ -402,27 +476,18 @@ def create_server(port=8511):
                 if route == "/api/health":
                     return self.respond({"app": "traffic-lab-web", "version": 1})
                 if route == "/api/config":
-                    from traffic_ai.runtime import runtime_root, python_path
-                    vehicle_ready=python_path().is_file() and (runtime_root()/"models"/"yolo11s.pt").is_file()
-                    return self.respond({"vehicle_tracking_ready":vehicle_ready,"defaults": Settings().to_dict(), "presets": {k: v.to_dict() for k, v in PRESETS.items()},
-                                         "samples": [{"name": k, "label": v} for k, v in SAMPLE_NAMES.items() if (ROOT / "demo" / k).is_file()]})
+                    return self.respond({"defaults": Settings().to_dict(), "presets": {k: v.to_dict() for k, v in PRESETS.items()}, "scope": "ivp-only"})
                 if route == "/api/media":
                     with lab.lock:
                         return self.respond(lab.resume(query.get("id", [None])[0]))
                 if route == "/api/runs":
                     return self.respond([lab.run(p.parent.name) for p in history()])
+                if route == '/api/run-library':
+                    return self.respond(lab.library.page(query.get('q',[''])[0],query.get('status',[''])[0],
+                                                        query.get('before',[''])[0],int(query.get('limit',['30'])[0])))
                 if route == "/api/run":
                     return self.respond(lab.run(query.get("id", [None])[0]))
-                if route == "/api/review":
-                    if query.get("id", [None])[0] != lab.review_id or lab.review_future is None:
-                        raise ValueError("Review not found.")
-                    if not lab.review_future.done():
-                        return self.respond({"state": "running"})
-                    try:
-                        return self.respond({"state": "complete", "review": lab.review_future.result()})
-                    except Exception as exc:
-                        return self.respond({"state": "failed", "error": str(exc)})
-                static = {"/": "index.html", "/app.js": "app.js", "/styles.css": "styles.css"}
+                static = {"/": "index.html", "/ivp": "index.html", "/ivp/": "index.html", "/app.js": "app.js", "/styles.css": "styles.css"}
                 if route not in static:
                     return self.respond({"error": "Not found"}, 404)
                 path = WEB / static[route]

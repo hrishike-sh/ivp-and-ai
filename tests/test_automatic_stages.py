@@ -9,7 +9,7 @@ import pytest
 from ivp.automatic import choose_settings
 from ivp.pipeline import process_frame
 from ivp.stages import build_stages, manifest
-from tests.test_web_server import server, request
+from tests.test_web_server import server as server, request
 
 
 @pytest.mark.parametrize('kind', ['black', 'white', 'dark', 'noisy', 'stripes'])
@@ -25,7 +25,8 @@ def test_automatic_graph_is_finite_and_deterministic(kind):
     assert settings == choose_settings(rgb)[0]
     result = process_frame(rgb, settings)
     steps = build_stages(result, settings)
-    assert len(steps) == 22
+    assert len(steps) == 28
+    assert {'paint_background', 'paint_contrast', 'paint_mask'} <= {s['id'] for s in steps}
     assert np.array_equal(original, rgb)
     seen = set()
     for step in steps:
@@ -53,7 +54,7 @@ def test_automatic_preview_export_and_manual_override(server):
     data = {'media':media['id'], 'mode':'automatic', 'settings':{'gamma':4}}
     preview = request(server, '/api/preview', data)
     assert preview['settings']['gamma'] == 1.5
-    assert len(preview['ivp_steps']) == 22
+    assert len(preview['ivp_steps']) == 28
     assert preview['automatic']['mode'] == 'automatic'
     exported = request(server, '/api/export', data)
     assert exported['report']['settings'] == preview['settings']
@@ -61,8 +62,8 @@ def test_automatic_preview_export_and_manual_override(server):
     link = next(d['url'] for d in exported['downloads'] if d['name'] == 'ivp-stages.zip')
     with urllib.request.urlopen(link) as response:
         with zipfile.ZipFile(io.BytesIO(response.read())) as archive:
-            assert len(archive.namelist()) == 24
-            assert len(json.loads(archive.read('stages.json'))) == 22
+            assert len(archive.namelist()) == 30
+            assert len(json.loads(archive.read('stages.json'))) == 28
             assert json.loads(archive.read('processing.json'))['settings'] == preview['settings']
             assert Image.open(archive.open('02-gray.png')).mode == 'L'
     manual = request(server, '/api/preview', {**data, 'mode':'manual','settings':{}})

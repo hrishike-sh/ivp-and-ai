@@ -13,6 +13,7 @@ import cv2
 from .jobs import job_lock, now
 from .media import hidden_process_options, png_bytes, tool_path, video_frames, write_json, source_revision
 from .pipeline import Settings, process_frame, scene_distance, scene_signature
+from .marking_policy import mask_export_manifest, review_only_policy
 
 
 class Cancelled(Exception):
@@ -22,6 +23,16 @@ class Cancelled(Exception):
 def check_cancel(run):
     if (run / "cancel.request").exists():
         raise Cancelled()
+
+
+def check_source(source, expected_revision=None):
+    try:
+        revision = source_revision(source)
+    except OSError as exc:
+        raise ValueError('Source video is no longer available. Reopen it and recalibrate before retrying.') from exc
+    if expected_revision and revision != expected_revision:
+        raise ValueError('Source video changed after preview. Reopen it and recalibrate before retrying.')
+    return revision
 
 
 def update(run, state, **kwargs):
@@ -49,8 +60,8 @@ def process_video(run, frame_hook=None, final_hook=None, final_key='ai'):
     try:
         tool_path("ffmpeg")
         check_cancel(run)
-        if info.get('source_revision') and info['source_revision'] != source_revision(source):
-            raise ValueError('Source video changed after preview. Reopen it and recalibrate before retrying.')
+        # Legacy requests lack a stored revision; bind this run once at startup.
+        expected_revision = check_source(source, info.get('source_revision'))
         update(run, "running", progress=0, message="Processing frames.")
         with (run / "measurements.csv").open("w", newline="", encoding="utf-8") as metrics_file, \
              (run / "scene_changes.csv").open("w", newline="", encoding="utf-8") as scene_file, \
@@ -80,6 +91,11 @@ def process_video(run, frame_hook=None, final_hook=None, final_key='ai'):
                                "transform_to_source_pixel_centres": result.transform_to_source.tolist(),
                                "source_orientation": "display-oriented RGB; EXIF/display rotation already applied",
                                "padding": "Right/bottom edge padding to even dimensions for H.264, if necessary."})
+                    archive.writestr('manifest.json', json.dumps(mask_export_manifest(masks, {
+                        'source_name': source.name,
+                        'source_revision': expected_revision,
+                        'timestamp_scope': 'Each PNG folder records source frame index and relative presentation seconds.',
+                        'transform_to_source_pixel_centres': result.transform_to_source.tolist()}), indent=2))
                 signature = scene_signature(rgb)
                 distance = scene_distance(previous, signature)
                 if distance >= settings.scene_threshold:
@@ -123,6 +139,9 @@ def process_video(run, frame_hook=None, final_hook=None, final_key='ai'):
             encoder = None
         check_cancel(run)
         update(run, "encoding", progress=0.97, frames=frame_count, message="Finalising MP4 and preserving audio.")
+        # Audio opens the source path again, independently of the decoder handle.
+        check_cancel(run)
+        check_source(source, expected_revision)
         command = [tool_path("ffmpeg"), "-hide_banner", "-y", "-copyts", "-i", str(run / "video.partial.mp4"),
                    "-itsoffset", str(-first_absolute), "-i", str(source), "-map", "0:v:0", "-map", "1:a:0?",
                    "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-af", "atrim=start=0", "-t", str(total_duration),
@@ -145,19 +164,23 @@ def process_video(run, frame_hook=None, final_hook=None, final_key='ai'):
             detail = (run / "ffmpeg.log").read_text(encoding="utf-8", errors="replace")[-700:]
             raise RuntimeError("FFmpeg could not finalise the MP4. " + detail)
         check_cancel(run)
+        check_source(source, expected_revision)
         report = {"schema_version": 1, "kind": "video", "source": source.name, "source_info": info,
                   "settings": settings.to_dict(), "frames": frame_count, "duration_seconds": total_duration,
                   "elapsed_seconds": time.monotonic() - begin, "scene_change_candidates": total_changes,
                   "mean_processed_quality": {k: v / frame_count for k, v in sums.items()},
-                  "mask_export": {"names": masks, "sampling": "First frame at or after each next 1-second interval"},
+                  "mask_export": {"names": masks, "sampling": "First frame at or after each next 1-second interval",
+                                  "marking_policy": review_only_policy()},
                   "timestamp_policy": "Original frame presentation intervals preserved at 1/90000-second resolution; start normalised to zero.",
                   "audio_policy": "First audio track retained as AAC with original relative timestamps; negative pre-roll trimmed.",
                   "limitations": ["Quality and scene changes are heuristics.", "Road and colour masks do not classify traffic rules."]}
         if final_hook:
             report[final_key] = final_hook()
         check_cancel(run)
+        check_source(source, expected_revision)
         write_json(run / "report.json", report)
         check_cancel(run)
+        check_source(source, expected_revision)
         (run / "video.partial.mp4").unlink(missing_ok=True)
         update(run, "complete", progress=1, frames=frame_count, message="Video is ready.", duration=total_duration)
     except Cancelled:

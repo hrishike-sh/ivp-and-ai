@@ -4,8 +4,11 @@ import math
 import cv2
 import numpy as np
 
+from .marking_policy import review_only_policy
+from .paint import paint_support
 
-def survey(rgb, rectangle, transform=None):
+
+def survey(rgb, rectangle, transform=None, *, capture_stages=False):
     if (not isinstance(rectangle, list) or len(rectangle) != 4 or
         any(isinstance(v, bool) or not isinstance(v, (int, float)) or
             not math.isfinite(v) or not 0 <= v <= 1 for v in rectangle)):
@@ -16,33 +19,13 @@ def survey(rgb, rectangle, transform=None):
     if right-left < 16 or bottom-top < 16:
         raise ValueError('Select a road region at least 16 pixels wide and high.')
     crop = rgb[top:bottom, left:right].copy()
-    hsv = cv2.cvtColor(crop, cv2.COLOR_RGB2HSV)
     gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
-    hue, sat, value = cv2.split(hsv)
-    # Otsu separates bright paint-like pixels from the selected road's value
-    # distribution. A dark floor and a flat-region check prevent trivial masks.
-    otsu, _ = cv2.threshold(value, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    floor = max(100, min(230, int(otsu) + 1))
-    flat = float(np.percentile(value, 99)-np.percentile(value, 1)) < 20
-    kernel = np.ones((3, 3), np.uint8)
-    min_area = max(20, math.ceil(gray.size * .0005))
-
-    def segment(threshold):
-        white = (sat <= 65) & (value >= threshold)
-        yellow = (hue >= 15) & (hue <= 38) & (sat >= 70) & (value >= threshold)
-        raw = ((white | yellow) * 255).astype(np.uint8)
-        if flat:
-            raw[:] = 0
-        cleaned = cv2.morphologyEx(raw, cv2.MORPH_OPEN, kernel)
-        cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, kernel)
-        count, labels, stats, _ = cv2.connectedComponentsWithStats(cleaned)
-        keep = np.zeros(count, np.uint8)
-        keep[1:] = (stats[1:, cv2.CC_STAT_AREA] >= min_area) * 255
-        return raw, keep[labels]
-
-    raw, mask = segment(floor)
-    _, low = segment(max(0, floor-20))
-    _, high = segment(min(255, floor+20))
+    support = paint_support(crop, capture_stages=True) if capture_stages else paint_support(crop)
+    raw, mask = support.raw, support.mask
+    low_support = paint_support(crop, contrast_multiplier=.75)
+    high_support = paint_support(crop, contrast_multiplier=1.25)
+    low, high = low_support.mask, high_support.mask
+    low_coverage, high_coverage = float(np.mean(low > 0)*100), float(np.mean(high > 0)*100)
     union = (low > 0) | (high > 0)
     agreement = float(np.count_nonzero((low > 0) & (high > 0))/union.sum()) if union.any() else None
     count, labels, stats, centres = cv2.connectedComponentsWithStats(mask)
@@ -62,7 +45,7 @@ def survey(rgb, rectangle, transform=None):
         orientation = angle if values[-1] > 1.2*max(values[0], 1e-9) else None
         cx, cy = map(float, centres[i])
         source = transform @ [cx+left, cy+top, 1]
-        row = {'id': i, 'area_px': area, 'bbox_x': x+left, 'bbox_y': y+top,
+        row = {'id': i, **review_only_policy(), 'area_px': area, 'bbox_x': x+left, 'bbox_y': y+top,
                'bbox_width_px': width, 'bbox_height_px': height,
                'long_side_px': float(max(side_a, side_b)), 'short_side_px': float(min(side_a, side_b)),
                'orientation_deg_clockwise_from_right': orientation,
@@ -75,25 +58,48 @@ def survey(rgb, rectangle, transform=None):
                 'Coverage describes visible candidate pixels, not paint wear, road occupancy or physical area. Perspective and occlusion affect results.']
     if not rows:
         warnings.append('No retained bright white/yellow fragments. This does not prove markings are absent; dark or faded markings can be missed.')
-    if flat:
-        warnings.append('Too little brightness separation in this selection; segmentation is withheld. Include both road and markings.')
+    if support.parameters['flat_input_withheld']:
+        warnings.append('Low overall brightness range: support was withheld because no fragment passed the stronger local-contrast, shape and flank checks. Small or faint markings can still be missed.')
+    elif support.parameters['flat_minority_rescued']:
+        warnings.append('Low overall percentile range, but minority appearance was retained through stronger local contrast and the existing shape/flank checks. This does not establish paint semantics.')
     if agreement is not None and agreement < .75:
-        warnings.append('Segmentation changes substantially under a ±20 brightness-threshold test. Inspect both sensitivity masks.')
+        warnings.append('Segmentation changes substantially between the 0.75x and 1.25x local-contrast probes. Inspect both sensitivity masks.')
     if any(r['touches_roi_boundary'] for r in rows):
         warnings.append('Some fragments touch the selection boundary and may be truncated.')
-    report = {'method': 'classical_marking_survey_v1', 'uses_ai': False,
+    warnings.append('Local brightness contrast and elongated shape reject broad pavement; joined sparse fragments are split before measurement. Faint, narrow or irregular paint can still be missed.')
+    warnings.append('Two darker flanks reject unsupported illumination bands. A yellow vehicle roof can still pass. Every fragment is REVIEW ONLY and is ineligible for configured geometry or incident rules.')
+    warnings.append('Probe agreement measures processing sensitivity only. Identical masks are not certainty or detection accuracy; component filtering can make coverage non-monotonic as the threshold changes.')
+    report = {'method': 'classical_marking_survey_v5', 'uses_ai': False,
+              **review_only_policy(),
               'roi_normalized': rectangle, 'roi_xyxy_exclusive': [left, top, right, bottom],
               'analysis_size': [w, h], 'transform_to_source_pixel_centres': transform.tolist(),
-              'parameters': {'brightness_threshold': floor, 'otsu_value': float(otsu),
-                             'threshold_rule': 'Otsu value + 1, bounded to 100–230; withhold if p99-p1 < 20',
-                             'white_saturation_max': 65,
-                             'yellow_hue_range': [15, 38], 'yellow_saturation_min': 70,
-                             'morphology': 'open then close, 3x3', 'minimum_component_area_px': min_area},
+              'parameters': support.parameters, 'support': support.counts,
+              'component_profile_evidence': support.profiles,
+              'sensitivity': {'method': 'local_contrast_probes_v1', 'basis': 'minimum_local_contrast',
+                              'units': support.parameters['contrast_units'],
+                              'base_threshold': support.parameters['minimum_local_contrast'],
+                              'low': {'multiplier': .75, 'threshold': low_support.parameters['minimum_local_contrast'],
+                                      'coverage_percent': low_coverage, 'mask_file': 'contrast-075x.png',
+                                      'flat_input_status': low_support.parameters['flat_input_status']},
+                              'high': {'multiplier': 1.25, 'threshold': high_support.parameters['minimum_local_contrast'],
+                                       'coverage_percent': high_coverage, 'mask_file': 'contrast-125x.png',
+                                       'flat_input_status': high_support.parameters['flat_input_status']},
+                              'probe_mask_iou': agreement,
+                              'coverage_range_percent': [min(low_coverage, high_coverage), max(low_coverage, high_coverage)]},
               'summary': {'roi_area_px': int(gray.size), 'candidate_area_px': int(np.count_nonzero(mask)),
                           'coverage_percent': float(np.mean(mask > 0)*100), 'fragments': len(rows),
-                          'threshold_low_coverage_percent': float(np.mean(low > 0)*100),
-                          'threshold_high_coverage_percent': float(np.mean(high > 0)*100),
-                          'threshold_mask_iou': agreement},
+                          'contrast_low_coverage_percent': low_coverage,
+                          'contrast_high_coverage_percent': high_coverage,
+                          'contrast_probe_mask_iou': agreement},
               'fragments': rows, 'limitations': warnings}
-    return report, {'selected-road': crop, 'raw-segmentation': raw, 'cleaned-mask': mask,
-                    'threshold-minus-20': low, 'threshold-plus-20': high, 'annotated-survey': overlay}
+    images = {'selected-road': crop, 'raw-segmentation': raw, 'cleaned-mask': mask,
+                    'local-background': support.background, 'local-paint-contrast': support.contrast,
+                    'colour-seed': support.raw, 'shape-proposals': support.shape_mask,
+                    'unbracketed-proposals': support.uncertain,
+                    'rejected-seed': support.rejected,
+                    'contrast-075x': low, 'contrast-125x': high, 'annotated-survey': overlay}
+    if capture_stages:
+        from .presentation import road_presentation
+        report['ivp_demo'], assets = road_presentation(report, images, support.trace)
+        images.update({'executed-' + key: pixels for key, pixels in assets.items()})
+    return report, images

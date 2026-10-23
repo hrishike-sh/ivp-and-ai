@@ -1,6 +1,7 @@
 """An explicit classical image-processing graph for inspection and teaching."""
 import cv2
 import numpy as np
+from .marking_policy import review_only_policy
 
 
 def build_stages(result, settings):
@@ -61,7 +62,8 @@ def build_stages(result, settings):
     stages = []
     def add(key, title, parent, branch, image, explanation, parameters=None):
         stages.append({'id': key, 'title': title, 'parent': parent, 'branch': branch,
-                       'image': image, 'explanation': explanation, 'parameters': parameters or {}})
+                       'image': image, 'explanation': explanation, 'parameters': parameters or {},
+                       **(review_only_policy() if branch == 'Markings' else {})})
     add('original', 'Original colour', None, 'Preparation', rgb, 'Display-oriented RGB, resized only when needed. The uploaded file is unchanged.')
     add('gray', 'Black & white · grayscale', 'original', 'Preparation', gray, 'Weighted RGB luminance removes colour while retaining 256 intensity levels. This is not yet a binary image.')
     add('smooth', 'Noise reduction', 'gray', 'Preparation', smooth, 'Reduce small intensity fluctuations before extracting structures. Fine detail can also be smoothed.', {'filter': settings.denoise, 'kernel': settings.kernel})
@@ -81,7 +83,13 @@ def build_stages(result, settings):
     for name, mask in colour_masks.items():
         add(name.lower(), name + ' colour isolation', 'original', 'Colour', mask, 'HSV thresholds on original colour. A coloured patch does not identify a traffic signal or its meaning.')
     add('white', 'White road-marking mask', 'original', 'Colour', result.features['White marking mask'], 'Bright low-saturation regions may include paint, vehicles, glare and buildings.')
-    add('road', 'Road-marking candidates', 'white', 'Shapes', result.features['Road candidates'], 'Classical stripe geometry and Hough segments produce appearance candidates, not confirmed crossings or stop lines.')
+    add('paint_seed', 'White / yellow appearance seed', 'original', 'Markings', result.features['Paint colour seed'], 'Original-colour seed before geometric rejection. Raw proposals are preserved for inspection. REVIEW ONLY; vehicles, pavement and glare can be selected.')
+    add('paint_background', 'Local road brightness background', 'original', 'Markings', result.features['Paint background'], 'Large-scale median of original HSV Value estimates the slowly changing illumination. It can also absorb wide paint; this is an estimate, not a clean road reconstruction.', result.candidates['paint_support']['parameters'])
+    add('paint_contrast', 'Paint contrast above local background', 'paint_background', 'Markings', result.features['Paint local contrast'], 'Subtract the median background from original HSV Value with negative differences clipped to zero. Warm bright pavement alone does not satisfy this local contrast test.', {'inputs': ['original', 'paint_background']})
+    add('paint_shapes', 'Elongated shape proposals', 'paint_contrast', 'Markings', result.features['Paint shape proposals'], 'Opening, closing, sparse-bridge splitting and rotated geometry propose elongated fragments before the two-flank check. REVIEW ONLY; an illumination band can have the same shape.')
+    add('paint_uncertain', 'Unbracketed proposals · withheld', 'paint_shapes', 'Markings', result.features['Paint unbracketed proposals'], 'These shape proposals lack enough observed darker pixels on both sides. They are preserved here, excluded from the supported mask, and ineligible for geometry or rules.')
+    add('paint_mask', 'Two-sided bright bands · review only', 'paint_shapes', 'Markings', result.features['Paint candidate mask'], 'Sample five sections along each proposed band. At least three sections are needed and 60% must have darker observed flanks on both sides. This reduces broad illumination bands, but a yellow vehicle roof still passes. REVIEW ONLY; never configures road geometry or incident rules.', result.candidates['paint_support']['counts'])
+    add('road', 'Road-marking candidates', 'paint_mask', 'Markings', result.features['Road candidates'], 'Lower-frame paint-like fragments and near-horizontal Hough segments produce appearance candidates, not confirmed crossings, stop lines or legal-rule applicability.')
     add('frequency', 'Frequency spectrum · FFT', 'gray', 'Frequency', normalize(spectrum), 'Log magnitude of the centred 2D Fourier transform. The centre represents low frequencies; texture and edges contribute higher frequencies.')
     return stages
 

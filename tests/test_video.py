@@ -5,7 +5,6 @@ import subprocess
 import sys
 import time
 import zipfile
-from pathlib import Path
 from types import SimpleNamespace
 
 import av
@@ -63,7 +62,10 @@ def test_audio_timing_masks_and_output(source, tmp_path):
         audio = list(container.decode(audio=0))
         assert sum(frame.samples for frame in audio) > 40000
     with zipfile.ZipFile(run / "masks.zip") as archive:
-        assert len(archive.namelist()) == 2
+        assert len(archive.namelist()) == 3
+        manifest = json.loads(archive.read('manifest.json'))
+        assert manifest['status'] == 'review_only' and manifest['eligible_for_rules'] is False
+        assert manifest['source_binding']['source_revision']
     rows = list(csv.DictReader((run / "measurements.csv").open()))
     assert len(rows) == 18
 

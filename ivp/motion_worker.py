@@ -12,23 +12,19 @@ import cv2
 from .jobs import job_lock
 from .media import png_bytes, write_json
 from .motion import MotionAnalyzer
-from .incidents import IncidentAnalyzer
-from .incident_export import IncidentEvidence, draw_geometry
+from .performance import configure_opencv_threads
 from .worker import check_cancel, process_video, update
 
 
 def run_motion(run):
-    # Small frame operations suffer from oversubscription on the 16-thread host.
-    cv2.setNumThreads(2)
+    # The shared job lock keeps this CPU budget within one active video worker.
+    runtime = configure_opencv_threads()
     cv2.setRNGSeed(0)
     request = json.loads((run/'request.json').read_text(encoding='utf-8'))
     fps=request['info'].get('fps') or 30
     motion_config = dict(request['motion'])
-    incident_config = motion_config.pop('incidents', None)
     engine = MotionAnalyzer(**{**motion_config,'frame_interval':1/fps})
-    incidents = IncidentAnalyzer(incident_config, motion_config.get('calibration'), 1/fps)
-    with IncidentEvidence(run, incidents) as evidence, \
-         (run/'motion-activity.csv').open('w', newline='', encoding='utf-8') as activity_file, \
+    with (run/'motion-activity.csv').open('w', newline='', encoding='utf-8') as activity_file, \
          (run/'motion-crossings.csv').open('w', newline='', encoding='utf-8') as crossing_file, \
          (run/'motion-tracks.csv').open('w', newline='', encoding='utf-8') as track_file:
         activity = csv.DictWriter(activity_file, fieldnames=['timestamp_seconds','state','moving_area_percent','active_tracks','crossings_positive','crossings_negative','global_flow_px','unresolved_large_regions','flow_speed_px_s','flow_points','speed_estimates','stabilization_x_px','stabilization_y_px']+[f'camera_m{i}' for i in range(6)])
@@ -36,19 +32,13 @@ def run_motion(run):
         crossings = csv.DictWriter(crossing_file, fieldnames=['timestamp_seconds','track_id','direction','x','y'])
         crossings.writeheader()
         tracks = csv.writer(track_file)
-        tracks.writerow(['timestamp_seconds','track_id','centre_x_px','centre_y_px','bbox_x','bbox_y','bbox_width','bbox_height','speed','speed_unit','speed_status','speed_window_seconds','model_label','detection_confidence','feature_count','tracking_state'])
+        display_columns = ['speed_display_drawn','speed_display_reason'] if getattr(engine,'speed_display',None) else []
+        tracks.writerow(['timestamp_seconds','track_id','centre_x_px','centre_y_px','bbox_x','bbox_y','bbox_width','bbox_height','speed','speed_unit','speed_status','speed_window_seconds','feature_count','tracking_state']+display_columns)
         def frame(result, original, number, distance):
             output, metrics, events, visible = engine.step(result.color_rgb, result.timestamp, distance >= .45)
-            assessments = incidents.step(visible,result.timestamp,result.color_rgb.shape[:2],
-                registration_valid=not engine.stabilizer.failed,
-                scene_changed=distance>=.45 or metrics['state']=='camera/scene change')
-            evidence.record(assessments,engine.last_rgb,engine.stabilizer.matrix,
-                result.transform_to_source,number,request['info'].get('source_revision'))
-            if incidents.enabled and motion_config.get('output_view','tracks')=='tracks':
-                draw_geometry(output,incidents.config)
             activity.writerow(metrics); crossings.writerows(events)
             for key, t in visible:
-                tracks.writerow([result.timestamp,key,*t['centre'],*t['box'],t.get('speed'),t.get('speed_unit'),t.get('speed_status'),t.get('speed_window_seconds') if t.get('speed') is not None else None,t.get('model_label'),t.get('confidence'),t.get('feature_count'),t.get('tracking_state')])
+                tracks.writerow([result.timestamp,key,*t['centre'],*t['box'],t.get('speed'),t.get('speed_unit'),t.get('speed_status'),t.get('speed_window_seconds') if t.get('speed') is not None else None,t.get('feature_count'),t.get('tracking_state')]+[t.get(k) for k in display_columns])
             return output
         def finish():
             # Container duration can disagree with decoded PTS (especially VFR
@@ -68,8 +58,7 @@ def run_motion(run):
                         bins[index,0]+=float(row['moving_area_percent']);bins[index,1]+=1
                     bins[index,2]+=1
             summary=engine.summary()
-            if incidents.enabled:
-                summary['incidents']=evidence.finish()
+            summary['processing_runtime'] = runtime
             summary['timing']={'source_metadata_duration_seconds':request['info']['duration'],
                                'decoded_duration_seconds':duration,
                                'timeline_aggregation':'Arithmetic mean over observed frames in each time bin; at most 600 bins.'}
@@ -90,9 +79,6 @@ def run_motion(run):
                     check_cancel(run)
                     if path.suffix in ('.png','.csv','.json','.jsonl','.npy'):
                         archive.write(path,path.name)
-                for path in run.glob('incident-*.png'):
-                    check_cancel(run)
-                    archive.write(path,path.name)
                 check_cancel(run)
                 archive.write(run/'coordinates.json','coordinates.json')
                 check_cancel(run)

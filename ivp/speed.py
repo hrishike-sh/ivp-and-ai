@@ -1,7 +1,9 @@
 """Road-plane calibration and timestamp-based region speed estimates."""
-from collections import deque
+from collections import Counter, deque
+
 import cv2
 import numpy as np
+
 from .timing import FrameTiming
 
 
@@ -40,16 +42,24 @@ class SpeedEstimator:
         self.maximum = 0.
         self.invalid_reason = None
         self.position_jumps = 0
+        self.status_counts = Counter()
 
     def invalidate(self):
         if self.calibration:
             self.invalid_reason = 'camera/scene changed; calibration no longer valid'
 
     def update(self, track, stamp, shape):
+        self._update(track, stamp, shape)
+        self.status_counts[track['speed_status']] += 1
+
+    def _update(self, track, stamp, shape):
         history = track.setdefault('speed_history', deque(maxlen=180))
         x,y,w,h = track['box']
         point = np.array([x+w/2, y+h], dtype=float)
-        track.update(speed=None, speed_unit='km/h' if self.calibration else 'px/s', speed_status='collecting stable track')
+        # The window describes this estimate, so a withheld observation must
+        # not inherit the last accepted estimate's metadata.
+        track.update(speed=None, speed_window_seconds=None,
+                     speed_unit='km/h' if self.calibration else 'px/s', speed_status='collecting stable track')
         if track.get('speed_blocked'):
             history.clear();track['speed_status']=track['speed_blocked'];return
         if self.invalid_reason:
@@ -110,6 +120,10 @@ class SpeedEstimator:
                 'invalid_reason':self.invalid_reason,
                 'calibration':self.calibration.config if self.calibration else None,
                 'accepted_track_samples':self.accepted,
+                'observed_track_samples':sum(self.status_counts.values()),
+                'withheld_track_samples':sum(self.status_counts.values())-self.accepted,
+                'status_counts':dict(self.status_counts),
+                'sample_accounting':'One outcome per observed track sample sent to this estimator; frames with no visible track are not included. Counts are not vehicles or an accuracy score.',
                 'rejected_position_jumps':self.position_jumps,
                 'sample_mean':self.sum_speed/self.accepted if self.accepted else None,
                 'maximum':self.maximum if self.accepted else None,
